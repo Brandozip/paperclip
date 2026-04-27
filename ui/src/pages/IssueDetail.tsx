@@ -2871,10 +2871,10 @@ export function IssueDetail() {
         onAddSubIssue={openNewSubIssue}
         onUpdate={handleIssuePropertiesUpdate}
         hasActiveRun={resolvedHasActiveRun}
-        externalObjects={externalObjectsState.groups}
-        externalObjectsLoading={externalObjectsState.isLoading}
-        externalObjectsError={externalObjectsState.isError}
-        onRetryExternalObjects={externalObjectsState.refetch}
+        externalObjects={externalObjectsState.isEnabled ? externalObjectsState.groups : undefined}
+        externalObjectsLoading={externalObjectsState.isEnabled ? externalObjectsState.isLoading : undefined}
+        externalObjectsError={externalObjectsState.isEnabled ? externalObjectsState.isError : undefined}
+        onRetryExternalObjects={externalObjectsState.isEnabled ? externalObjectsState.refetch : undefined}
       />
     );
     return () => closePanel();
@@ -2887,6 +2887,7 @@ export function IssueDetail() {
     panelChildIssues,
     panelIssue,
     resolvedHasActiveRun,
+    externalObjectsState.isEnabled,
     externalObjectsState.groups,
     externalObjectsState.isLoading,
     externalObjectsState.isError,
@@ -3967,7 +3968,7 @@ export function IssueDetail() {
           multiline
           foldable
           mentions={mentionOptions}
-          externalReferences={externalObjectsState.markdownReferences}
+          externalReferences={externalObjectsState.isEnabled ? externalObjectsState.markdownReferences : undefined}
           imageUploadHandler={async (file) => {
             const attachment = await uploadAttachment.mutateAsync(file);
             return attachment.contentPath;
@@ -4070,7 +4071,7 @@ export function IssueDetail() {
         feedbackDataSharingPreference={feedbackDataSharingPreference}
         feedbackTermsUrl={FEEDBACK_TERMS_URL}
         mentions={mentionOptions}
-        externalReferences={externalObjectsState.markdownReferences}
+        externalReferences={externalObjectsState.isEnabled ? externalObjectsState.markdownReferences : undefined}
         imageUploadHandler={async (file) => {
           const attachment = await uploadAttachment.mutateAsync(file);
           return attachment.contentPath;
@@ -4262,7 +4263,7 @@ export function IssueDetail() {
               resumeFromBacklogPending={
                 updateIssue.isPending && updateIssue.variables?.status === "todo"
               }
-              externalReferences={externalObjectsState.markdownReferences}
+              externalReferences={externalObjectsState.isEnabled ? externalObjectsState.markdownReferences : undefined}
             />
           ) : null}
         </TabsContent>
@@ -4286,7 +4287,7 @@ export function IssueDetail() {
               }}
               onCheckMonitorNow={() => checkIssueMonitorNow.mutate()}
               checkingMonitorNow={checkIssueMonitorNow.isPending}
-              externalReferences={externalObjectsState.markdownReferences}
+              externalReferences={externalObjectsState.isEnabled ? externalObjectsState.markdownReferences : undefined}
             />
           ) : null}
         </TabsContent>
@@ -4294,10 +4295,11 @@ export function IssueDetail() {
         <TabsContent value="related-work">
           <IssueRelatedWorkPanel
             relatedWork={issue.relatedWork}
-            externalObjects={externalObjectsState.groups}
-            externalObjectsLoading={externalObjectsState.isLoading}
-            externalObjectsError={externalObjectsState.isError}
-            onRetryExternalObjects={externalObjectsState.refetch}
+            externalObjectsEnabled={externalObjectsState.isEnabled}
+            externalObjects={externalObjectsState.isEnabled ? externalObjectsState.groups : undefined}
+            externalObjectsLoading={externalObjectsState.isEnabled ? externalObjectsState.isLoading : undefined}
+            externalObjectsError={externalObjectsState.isEnabled ? externalObjectsState.isError : undefined}
+            onRetryExternalObjects={externalObjectsState.isEnabled ? externalObjectsState.refetch : undefined}
           />
         </TabsContent>
 
@@ -4486,10 +4488,10 @@ export function IssueDetail() {
                 onUpdate={(data) => updateIssue.mutate(data)}
                 inline
                 hasActiveRun={resolvedHasActiveRun}
-                externalObjects={externalObjectsState.groups}
-                externalObjectsLoading={externalObjectsState.isLoading}
-                externalObjectsError={externalObjectsState.isError}
-                onRetryExternalObjects={externalObjectsState.refetch}
+                externalObjects={externalObjectsState.isEnabled ? externalObjectsState.groups : undefined}
+                externalObjectsLoading={externalObjectsState.isEnabled ? externalObjectsState.isLoading : undefined}
+                externalObjectsError={externalObjectsState.isEnabled ? externalObjectsState.isError : undefined}
+                onRetryExternalObjects={externalObjectsState.isEnabled ? externalObjectsState.refetch : undefined}
               />
             </div>
           </ScrollArea>

@@ -16,6 +16,7 @@ import { validate } from "../middleware/validate.js";
 import { accessService, projectService, logActivity, workspaceOperationService } from "../services/index.js";
 import { conflict, forbidden } from "../errors.js";
 import { externalObjectService } from "../services/external-objects.js";
+import { instanceSettingsService } from "../services/instance-settings.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   buildWorkspaceRuntimeDesiredStatePatch,
@@ -45,7 +46,10 @@ export function projectRoutes(db: Db) {
   const access = accessService(db);
   const secretsSvc = secretService(db);
   const workspaceOperations = workspaceOperationService(db);
-  const externalObjectsSvc = externalObjectService(db);
+  const instanceSettings = instanceSettingsService(db);
+  const externalObjectsSvc = externalObjectService(db, {
+    enabled: async () => (await instanceSettings.getExperimental()).enableExternalObjects === true,
+  });
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
   const environmentsSvc = environmentService(db);
 
