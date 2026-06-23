@@ -31,6 +31,9 @@ const emptySummary: ExternalObjectSummary = {
   byStatusCategory: {},
   byLiveness: {},
   highestSeverity: "neutral",
+  staleCount: 0,
+  authRequiredCount: 0,
+  unreachableCount: 0,
   objects: [],
 };
 
