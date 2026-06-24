@@ -102,7 +102,7 @@ On wake, the watchdog agent reads a fixed default mandate plus your custom instr
 
 - Treat every stopped leaf as a **claim** that must be verified against comments, documents, work products, screenshots, tests, blockers, and review state. Do not accept "I could not" or "waiting for approval" as automatically valid.
 - Leave genuinely-complete leaves alone, with a short note on what was checked.
-- If a leaf is not genuinely complete, restore a live path: reopen the issue, reassign, comment actionable instructions, create a follow-up child issue inside the watched subtree, or accept an eligible task-level plan confirmation.
+- If a leaf is not genuinely complete, restore a live path: reopen or reassign the issue with actionable instructions, create a follow-up child issue inside the watched subtree, set a bounded one-shot monitor, or accept an eligible task-level plan confirmation.
 - If the blocker is real, leave a valid waiting disposition that names the unblock owner and the next action.
 
 The mandate also enforces safety constraints that custom instructions **cannot override**:
@@ -118,19 +118,19 @@ The formal authority contract (the full list of allowed and disallowed mutations
 
 Each stopped leaf creates a proof obligation: the watchdog must either verify the stopped disposition against bounded evidence or restore a valid path that will move the work forward. A proof obligation is not satisfied by a prose-only comment such as "looks blocked" or "seems done." The durable issue state must answer what happens next.
 
-The proof-obligation fingerprint is a stable hash over the leaf id, the leaf's stopped status, the stopped disposition being verified, the relevant evidence anchors, and any waiting primitive the watchdog depends on. Paperclip should treat watchdog proof handling as idempotent for `(watchdogId, stopFingerprint, proofObligationFingerprint)`. A retry or duplicate watchdog wake for the same obligation must reuse the recorded result instead of creating duplicate follow-up issues, duplicate blockers, or repeated monitor loops.
+The proof-obligation fingerprint is a stable hash over the leaf id, the leaf's stopped status, the stopped disposition being verified, the relevant evidence anchors, and any waiting or recovery primitive the watchdog depends on. Paperclip should treat watchdog proof handling as idempotent for `(watchdogId, stopFingerprint, proofObligationFingerprint)`. A retry or duplicate watchdog wake for the same obligation must reuse the recorded result instead of creating duplicate follow-up issues, duplicate blockers, or repeated monitor loops.
 
 Allowed proof outcomes:
 
 | Outcome       | Meaning                                                                 | Required durable state                                                                 |
 | ------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **Accepted**  | The stopped state is legitimate.                                        | Terminal, blocked, review, interaction, approval, owner, or monitor path is already valid; the watchdog records bounded evidence. |
-| **Restored**  | The stopped state was wrong or incomplete, and the watchdog moved work. | The leaf is reopened, reassigned, unblocked, given a child follow-up, given a monitor, or has an eligible plan confirmation resolved. |
-| **Deferred**  | Verification needs another bounded actor or check.                      | A first-class blocker, pending interaction/approval, human owner, typed reviewer, follow-up issue, or one-shot monitor names the owner and next action. |
+| **Accepted**  | The stopped state is legitimate.                                        | Terminal, blocked, review, interaction, approval, owner, explicit recovery action, or bounded one-shot monitor path is already valid; the watchdog records bounded evidence. |
+| **Restored**  | The stopped state was wrong or incomplete, and the watchdog moved work. | The leaf is reopened, reassigned, unblocked, given a child follow-up, given a bounded one-shot monitor, or has an eligible plan confirmation resolved. |
+| **Deferred**  | Verification needs another bounded actor or check.                      | A first-class blocker, pending interaction/approval, human owner, typed reviewer, follow-up issue, explicit recovery action, or bounded one-shot monitor names the owner and next action. |
 | **Failed**    | The watchdog could not safely verify or restore the obligation.         | The reusable watchdog issue is `blocked` or `in_review` with the real blocker, escalation owner, and safe next action. |
 | **Dismissed** | The obligation is a false positive for this watchdog pass.              | The reusable watchdog issue records why no source mutation is needed and the reviewed fingerprint can be suppressed. |
 
-Real verification blockers must be first-class. If the watchdog needs QA, CTO review, board approval, an external service result, or another team before it can decide, it must express that wait as a blocker, interaction, approval, owner/reviewer assignment, follow-up issue, or bounded one-shot monitor. A comment may explain the evidence, but the comment is not the waiting path.
+Real verification blockers must be first-class. If the watchdog needs QA, CTO review, board approval, an external service result, or another team before it can decide, it must express that wait as a blocker, interaction, approval, owner/reviewer assignment, follow-up issue, explicit recovery action, or bounded one-shot monitor. A comment may explain the evidence, but the comment is not the waiting path.
 
 Use one-shot monitors only when the current assignee owns a future check against an async service. A monitor is not recurring uptime monitoring; when it fires, the assignee must decide the next outcome and explicitly re-arm it if another bounded check is still appropriate. Use `blocked` with a named external owner/action when Paperclip does not own the check.
 
