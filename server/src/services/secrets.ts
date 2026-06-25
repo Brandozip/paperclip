@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { and, desc, eq, inArray, like, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -56,6 +58,7 @@ import type {
 } from "../secrets/types.js";
 import { isSecretProviderClientError } from "../secrets/types.js";
 import { authorizationService } from "./authorization.js";
+import { logActivity } from "./activity-log.js";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SENSITIVE_ENV_KEY_RE =
@@ -66,6 +69,8 @@ const COMING_SOON_SECRET_PROVIDERS: ReadonlySet<SecretProvider> = new Set([
   "vault",
 ]);
 const EMPTY_STATIC_ARGV: string[] = [];
+const DEFAULT_DYNAMIC_SECRET_COMMAND_TIMEOUT_MS = 30_000;
+const dynamicSecretCache = new Map<string, { value: string; expiresAt: number }>();
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type SecretBindingDb = Pick<Db | DbTransaction, "select" | "delete" | "insert">;
 
@@ -259,12 +264,17 @@ type RuntimeSecretResolution = {
   manifestEntry: RuntimeSecretManifestEntry;
 };
 
+type SecretBindingRow = typeof companySecretBindings.$inferSelect;
+
 type SecretResolutionErrorCode =
   | "binding_missing"
   | "secret_deleted"
   | "secret_inactive"
   | "version_missing"
   | "version_inactive"
+  | "dynamic_secret_command_failed"
+  | "dynamic_secret_command_timeout"
+  | "dynamic_secret_command_empty"
   | "provider_error";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -283,6 +293,101 @@ function normalizeSecretKey(input: string) {
     .replace(/[^a-z0-9_.-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 120);
+}
+
+function dynamicSecretCacheKey(input: { bindingId: string; staticArgv: string[] }) {
+  const argvHash = createHash("sha256")
+    .update(JSON.stringify(input.staticArgv))
+    .digest("hex");
+  return `${input.bindingId}:${argvHash}`;
+}
+
+function normalizeStaticArgv(value: unknown): string[] {
+  if (!Array.isArray(value)) return EMPTY_STATIC_ARGV;
+  if (value.some((entry) => typeof entry !== "string")) {
+    throw unprocessable("Dynamic secret binding has invalid static argv", {
+      code: "dynamic_secret_command_failed",
+    });
+  }
+  return value;
+}
+
+function dynamicSecretHttpError(code: SecretResolutionErrorCode, message: string) {
+  return new HttpError(422, message, { code });
+}
+
+function dynamicSecretCommandTimeoutMs() {
+  const configured = Number(process.env.PAPERCLIP_DYNAMIC_SECRET_COMMAND_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.min(configured, DEFAULT_DYNAMIC_SECRET_COMMAND_TIMEOUT_MS)
+    : DEFAULT_DYNAMIC_SECRET_COMMAND_TIMEOUT_MS;
+}
+
+async function runDynamicSecretCommand(input: {
+  command: string;
+  staticArgv: string[];
+  timeoutMs?: number;
+}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderrBytes = 0;
+    let settled = false;
+    const child = spawn(input.command, input.staticArgv, {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      reject(dynamicSecretHttpError(
+        "dynamic_secret_command_timeout",
+        "Dynamic secret generator timed out before producing a fresh value.",
+      ));
+    }, input.timeoutMs ?? dynamicSecretCommandTimeoutMs());
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderrBytes += Buffer.byteLength(chunk);
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(dynamicSecretHttpError(
+        "dynamic_secret_command_failed",
+        error instanceof Error && error.message.includes("ENOENT")
+          ? "Dynamic secret generator command was not found."
+          : "Dynamic secret generator failed before producing a fresh value.",
+      ));
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (code !== 0 || signal) {
+        reject(dynamicSecretHttpError(
+          "dynamic_secret_command_failed",
+          `Dynamic secret generator failed before producing a fresh value.${stderrBytes > 0 ? " Check host logs for details." : ""}`,
+        ));
+        return;
+      }
+      const value = stdout.trim();
+      if (!value) {
+        reject(dynamicSecretHttpError(
+          "dynamic_secret_command_empty",
+          "Dynamic secret generator produced an empty value.",
+        ));
+        return;
+      }
+      resolve(value);
+    });
+  });
 }
 
 function deriveSecretNameFromExternalRef(externalRef: string) {
@@ -320,6 +425,9 @@ function secretResolutionErrorCode(error: unknown): SecretResolutionErrorCode {
       case "secret_inactive":
       case "version_missing":
       case "version_inactive":
+      case "dynamic_secret_command_failed":
+      case "dynamic_secret_command_timeout":
+      case "dynamic_secret_command_empty":
       case "provider_error":
         return details.code;
     }
@@ -640,6 +748,29 @@ export function secretService(db: Db) {
         throw unprocessable("Secret is not active", { code: "secret_inactive" });
       }
       const binding = await assertBindingContext(companyId, secret.id, bindingContext);
+      if (secret.managedMode === "dynamic_command") {
+        if (providerId !== "host_command" || !secret.dynamicCommand) {
+          throw unprocessable("Dynamic secret is missing generator command config", {
+            code: "dynamic_secret_command_failed",
+          });
+        }
+        if (!binding) {
+          throw unprocessable("Dynamic secret resolution requires a runtime binding", { code: "binding_missing" });
+        }
+        const resolution = await resolveDynamicSecretValue({
+          companyId,
+          secret: {
+            id: secret.id,
+            key: secret.key,
+            provider: providerId,
+            dynamicCommand: secret.dynamicCommand,
+          },
+          binding,
+          configPath,
+          accessContext,
+        });
+        return resolution;
+      }
       const versionRow = await getSecretVersion(secret.id, resolvedVersion);
       if (!versionRow) throw new HttpError(404, "Secret version not found", { code: "version_missing" });
       if (versionRow.status === "disabled" || versionRow.status === "destroyed" || versionRow.revokedAt) {
@@ -704,6 +835,118 @@ export function secretService(db: Db) {
       }).catch(() => undefined);
       throw err;
     }
+  }
+
+  async function resolveDynamicSecretValue(input: {
+    companyId: string;
+    secret: {
+      id: string;
+      key: string;
+      provider: SecretProvider;
+      dynamicCommand: DynamicSecretCommandConfig;
+    };
+    binding: SecretBindingRow;
+    configPath: string | null;
+    accessContext: SecretConsumerContext | undefined;
+  }): Promise<RuntimeSecretResolution> {
+    const staticArgv = normalizeStaticArgv(input.binding.staticArgv);
+    const cacheKey = dynamicSecretCacheKey({ bindingId: input.binding.id, staticArgv });
+    const now = Date.now();
+    const cached = dynamicSecretCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return {
+        value: cached.value,
+        manifestEntry: {
+          configPath: input.configPath ?? "",
+          envKey: input.configPath?.startsWith("env.") ? input.configPath.slice("env.".length) : null,
+          secretId: input.secret.id,
+          bindingId: input.binding.id,
+          secretKey: input.secret.key,
+          version: 0,
+          provider: input.secret.provider,
+          outcome: "success",
+        },
+      };
+    }
+    if (cached) {
+      dynamicSecretCache.delete(cacheKey);
+    }
+
+    const value = await runDynamicSecretCommand({
+      command: input.secret.dynamicCommand.command,
+      staticArgv,
+    });
+    dynamicSecretCache.set(cacheKey, {
+      value,
+      expiresAt: now + input.secret.dynamicCommand.ttlSeconds * 1000,
+    });
+
+    await Promise.all([
+      db
+        .update(companySecrets)
+        .set({ lastResolvedAt: new Date(), updatedAt: new Date() })
+        .where(eq(companySecrets.id, input.secret.id))
+        .catch(() => undefined),
+      recordAccessEvent({
+        companyId: input.companyId,
+        secretId: input.secret.id,
+        version: 0,
+        provider: input.secret.provider,
+        context: input.accessContext,
+        outcome: "success",
+      }).catch(() => undefined),
+      recordDynamicSecretActivity({
+        companyId: input.companyId,
+        secretId: input.secret.id,
+        bindingId: input.binding.id,
+        configPath: input.configPath,
+        ttlSeconds: input.secret.dynamicCommand.ttlSeconds,
+        context: input.accessContext,
+      }).catch(() => undefined),
+    ]);
+
+    return {
+      value,
+      manifestEntry: {
+        configPath: input.configPath ?? "",
+        envKey: input.configPath?.startsWith("env.") ? input.configPath.slice("env.".length) : null,
+        secretId: input.secret.id,
+        bindingId: input.binding.id,
+        secretKey: input.secret.key,
+        version: 0,
+        provider: input.secret.provider,
+        outcome: "success",
+      },
+    };
+  }
+
+  async function recordDynamicSecretActivity(input: {
+    companyId: string;
+    secretId: string;
+    bindingId: string;
+    configPath: string | null;
+    ttlSeconds: number;
+    context: SecretConsumerContext | undefined;
+  }) {
+    if (!input.context?.issueId) return;
+    await logActivity(db, {
+      companyId: input.companyId,
+      actorType: input.context.actorType ?? "system",
+      actorId: input.context.actorId ?? "system",
+      action: "secret.dynamic_command_resolved",
+      entityType: "issue",
+      entityId: input.context.issueId,
+      agentId: input.context.actorType === "agent" ? input.context.actorId ?? null : null,
+      runId: input.context.heartbeatRunId ?? null,
+      details: {
+        secretId: input.secretId,
+        bindingId: input.bindingId,
+        configPath: input.configPath,
+        envKey: input.configPath?.startsWith("env.") ? input.configPath.slice("env.".length) : null,
+        ttlSeconds: input.ttlSeconds,
+        cache: "miss",
+      },
+    });
   }
 
   async function resolveSecretValue(
