@@ -24,7 +24,7 @@ jobs:
       PORT: "3100"
       PAPERCLIP_API_URL: http://127.0.0.1:3100
       PAPERCLIP_AUTH_HEADER: Bearer local-trusted-hermes-smoke
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.PAP11985_OPENROUTER_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -39,6 +39,9 @@ jobs:
       PAPERCLIP_API_URL_FOR_HERMES: http://127.0.0.1:3100
       HERMES_SMOKE_DIAG_DIR: /tmp/hermes-gateway-diag-${{ github.run_id }}-${{ github.run_attempt }}
       HERMES_SMOKE_STATE_DIR: /tmp/hermes-gateway-state-${{ github.run_id }}-${{ github.run_attempt }}
+      HERMES_SMOKE_MODEL_PROVIDER: openrouter
+      HERMES_SMOKE_MODEL_DEFAULT: z-ai/glm-5.2
+      HERMES_SMOKE_MODEL_BASE_URL: https://openrouter.ai/api/v1
       RUN_TIMEOUT_SEC: "420"
       CASE_TIMEOUT_SEC: "420"
 

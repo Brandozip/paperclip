@@ -48,6 +48,9 @@ HERMES_SMOKE_NETWORK="${HERMES_SMOKE_NETWORK:-}"
 HERMES_DOCKER_ADD_HOST="${HERMES_DOCKER_ADD_HOST:-1}"
 HERMES_SMOKE_STATE_DIR="${HERMES_SMOKE_STATE_DIR:-${TMPDIR:-/tmp}/paperclip-hermes-gateway-smoke-${RUN_SUFFIX}}"
 HERMES_SMOKE_DIAG_DIR="${HERMES_SMOKE_DIAG_DIR:-${TMPDIR:-/tmp}/paperclip-hermes-gateway-e2e-diag-${RUN_SUFFIX}}"
+HERMES_SMOKE_MODEL_PROVIDER="${HERMES_SMOKE_MODEL_PROVIDER:-}"
+HERMES_SMOKE_MODEL_DEFAULT="${HERMES_SMOKE_MODEL_DEFAULT:-}"
+HERMES_SMOKE_MODEL_BASE_URL="${HERMES_SMOKE_MODEL_BASE_URL:-}"
 HERMES_AGENT_NAME="${HERMES_AGENT_NAME:-Hermes Gateway Smoke Agent ${RUN_SUFFIX}}"
 PAPERCLIP_API_URL_FOR_HERMES="${PAPERCLIP_API_URL_FOR_HERMES:-http://host.docker.internal:3100}"
 RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-420}"
@@ -89,6 +92,9 @@ Common flags:
   HERMES_DOCKER_ADD_HOST=0|1
   HERMES_SMOKE_KEEP=1                              # keep diagnostics/container
   HERMES_SMOKE_DIAG_DIR=/tmp/hermes-gateway-diag
+  HERMES_SMOKE_MODEL_PROVIDER=openrouter
+  HERMES_SMOKE_MODEL_DEFAULT=z-ai/glm-5.2
+  HERMES_SMOKE_MODEL_BASE_URL=https://openrouter.ai/api/v1
 
 Mode notes:
   HERMES_GATEWAY_API_BASE_URL is the URL stored on the Paperclip adapter and
@@ -485,6 +491,38 @@ prepare_fresh_state() {
   if find "${HERMES_SMOKE_STATE_DIR}/hermes-home" -mindepth 1 -print -quit | grep -q .; then
     fail "Hermes state dir is not empty: ${HERMES_SMOKE_STATE_DIR}/hermes-home"
   fi
+}
+
+yaml_single_quote() {
+  local value="$1"
+  value="${value//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+
+write_hermes_model_config() {
+  if [[ -z "$HERMES_SMOKE_MODEL_PROVIDER" && -z "$HERMES_SMOKE_MODEL_DEFAULT" && -z "$HERMES_SMOKE_MODEL_BASE_URL" ]]; then
+    return
+  fi
+  if [[ -z "$HERMES_SMOKE_MODEL_PROVIDER" || -z "$HERMES_SMOKE_MODEL_DEFAULT" ]]; then
+    fail "HERMES_SMOKE_MODEL_PROVIDER and HERMES_SMOKE_MODEL_DEFAULT must be set together"
+  fi
+
+  local config_file="${HERMES_SMOKE_STATE_DIR}/hermes-home/config.yaml"
+  if [[ -e "$config_file" ]]; then
+    fail "Hermes model config already exists in fresh state: ${config_file}"
+  fi
+
+  {
+    echo "model:"
+    printf "  default: %s\n" "$(yaml_single_quote "$HERMES_SMOKE_MODEL_DEFAULT")"
+    printf "  provider: %s\n" "$(yaml_single_quote "$HERMES_SMOKE_MODEL_PROVIDER")"
+    if [[ -n "$HERMES_SMOKE_MODEL_BASE_URL" ]]; then
+      printf "  base_url: %s\n" "$(yaml_single_quote "$HERMES_SMOKE_MODEL_BASE_URL")"
+    fi
+    echo "providers: {}"
+  } > "$config_file"
+  chmod 644 "$config_file"
+  log "seeded Hermes model config provider=${HERMES_SMOKE_MODEL_PROVIDER} model=${HERMES_SMOKE_MODEL_DEFAULT}"
 }
 
 start_container() {
@@ -914,6 +952,7 @@ main() {
   resolve_company_id
 
   prepare_fresh_state
+  write_hermes_model_config
   build_image
   start_container
   assert_fresh_container_state
