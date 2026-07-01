@@ -18,6 +18,7 @@ const mockEnvironmentsApi = vi.hoisted(() => ({
   customImageTemplate: vi.fn(),
   startCustomImageSetupSession: vi.fn(),
   customImageSetupSession: vi.fn(),
+  createCustomImageTerminalSessionToken: vi.fn(),
   finishCustomImageSetupSession: vi.fn(),
   cancelCustomImageSetupSession: vi.fn(),
   rollbackCustomImageTemplate: vi.fn(),
@@ -67,6 +68,45 @@ vi.mock("@/api/secrets", () => ({
   unobserve() {}
   disconnect() {}
 };
+
+class FakeWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  static instances: FakeWebSocket[] = [];
+
+  readonly url: string;
+  readyState = FakeWebSocket.CONNECTING;
+  sent: string[] = [];
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    FakeWebSocket.instances.push(this);
+  }
+
+  send(data: string) {
+    this.sent.push(data);
+  }
+
+  close() {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.onclose?.(new Event("close") as CloseEvent);
+  }
+
+  open() {
+    this.readyState = FakeWebSocket.OPEN;
+    this.onopen?.(new Event("open"));
+  }
+
+  emitMessage(data: string) {
+    this.onmessage?.(new MessageEvent("message", { data }));
+  }
+}
 
 async function act(callback: () => void | Promise<void>) {
   await callback();
@@ -197,12 +237,16 @@ describe("CompanyEnvironments — test provider button", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot> | null;
   let probeResolvers: Map<string, () => void>;
+  let originalWebSocket: typeof WebSocket | undefined;
 
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = null;
     probeResolvers = new Map();
+    originalWebSocket = globalThis.WebSocket;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
     mockInstanceSettingsApi.get.mockResolvedValue({ defaultEnvironmentId: null });
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableEnvironments: true });
     mockEnvironmentsApi.capabilities.mockResolvedValue({ adapters: [], sandboxProviders: {} });
@@ -219,6 +263,16 @@ describe("CompanyEnvironments — test provider button", () => {
     mockEnvironmentsApi.customImageSetupSession.mockResolvedValue({
       session: createSession(),
       connectionPayload: { type: "ssh", command: "ssh sandbox@setup.example.invalid" },
+    });
+    mockEnvironmentsApi.createCustomImageTerminalSessionToken.mockResolvedValue({
+      id: "terminal-session-1",
+      token: "terminal-token-terminal-token-123456",
+      expiresAt: "2026-06-25T20:05:00.000Z",
+      setupSessionId: "session-1",
+      environmentId: "env-1",
+      connectionType: "ssh",
+      websocketPath:
+        "/api/environment-custom-image-setup-sessions/session-1/terminal/ws?terminalSessionId=terminal-session-1&token=terminal-token-terminal-token-123456",
     });
     mockEnvironmentsApi.finishCustomImageSetupSession.mockResolvedValue({
       session: createSession({ status: "promoted", promotedTemplateId: "template-1", finishedAt: "2026-06-25T20:10:00.000Z" }),
@@ -270,6 +324,12 @@ describe("CompanyEnvironments — test provider button", () => {
     root = null;
     container.remove();
     document.body.innerHTML = "";
+    if (originalWebSocket) {
+      globalThis.WebSocket = originalWebSocket;
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (globalThis as any).WebSocket;
+    }
     vi.clearAllMocks();
   });
 
@@ -567,6 +627,73 @@ describe("CompanyEnvironments — test provider button", () => {
       { reason: "operator cancelled" },
     );
     expect(getOpenDialog()?.textContent).not.toContain(command);
+  });
+
+  it("opens an embedded browser terminal while preserving the SSH command fallback", async () => {
+    root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const command = "ssh sandbox@setup.example.invalid -p 2222";
+    mockEnvironmentsApi.list.mockResolvedValue([
+      { id: "env-1", name: "Daytona", driver: "sandbox", description: null, config: { provider: "daytona" } },
+    ]);
+    mockEnvironmentsApi.capabilities.mockResolvedValue(supportedDaytonaCapabilities());
+    mockEnvironmentsApi.customImageTemplate.mockResolvedValue({
+      activeTemplate: null,
+      activeSession: createSession(),
+      latestSession: createSession(),
+    });
+    mockEnvironmentsApi.customImageSetupSession.mockResolvedValue({
+      session: createSession(),
+      connectionPayload: { type: "ssh", command },
+    });
+
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <CompanyEnvironments />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    await act(async () => click(editButtons(container)[0]));
+    await waitForAssertion(() => {
+      expect(getOpenDialog()?.textContent).toContain(command);
+      expect(findButton(getOpenDialog()!, "Open terminal")).toBeTruthy();
+    });
+
+    await act(async () => click(findButton(getOpenDialog()!, "Open terminal")));
+    await waitForAssertion(() => {
+      expect(mockEnvironmentsApi.createCustomImageTerminalSessionToken).toHaveBeenCalledExactlyOnceWith("session-1", {});
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    expect(FakeWebSocket.instances[0].url).toContain(
+      "/api/environment-custom-image-setup-sessions/session-1/terminal/ws?terminalSessionId=terminal-session-1",
+    );
+    expect(FakeWebSocket.instances[0].url).toContain("cols=100");
+    expect(FakeWebSocket.instances[0].url).toContain("rows=28");
+
+    await act(async () => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].emitMessage(JSON.stringify({ type: "ready" }));
+      FakeWebSocket.instances[0].emitMessage(JSON.stringify({ type: "output", data: "setup shell\\n$ " }));
+    });
+    await waitForAssertion(() => {
+      expect(getOpenDialog()?.textContent).toContain("setup shell");
+      expect(getOpenDialog()?.textContent).toContain(command);
+    });
+
+    const terminal = getOpenDialog()?.querySelector("[data-testid='custom-image-terminal-input-session-1']");
+    await act(async () => {
+      terminal?.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+      terminal?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+
+    expect(FakeWebSocket.instances[0].sent).toContain(JSON.stringify({ type: "input", data: "l" }));
+    expect(FakeWebSocket.instances[0].sent).toContain(JSON.stringify({ type: "input", data: "\r" }));
   });
 
   it("does not render connect details when an active session refreshes as expired", async () => {

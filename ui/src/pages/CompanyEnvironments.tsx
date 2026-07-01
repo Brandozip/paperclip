@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Play, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, Play, RefreshCw, RotateCcw, Terminal, Trash2, X } from "lucide-react";
 import {
   type EnvBinding,
   type Environment,
@@ -31,6 +31,7 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { useToast } from "@/context/ToastContext";
 import { queryKeys } from "@/lib/queryKeys";
+import { buildSameOriginWebSocketUrl } from "@/lib/websocket-url";
 import {
   Field,
   ToggleField,
@@ -218,6 +219,265 @@ function setupConnectionFallbackMessage(input: {
     return "Connection details are not available yet. You can still finish or cancel this setup.";
   }
   return null;
+}
+
+const CUSTOM_IMAGE_TERMINAL_COLS = 100;
+const CUSTOM_IMAGE_TERMINAL_ROWS = 28;
+const CUSTOM_IMAGE_TERMINAL_SCROLLBACK_LIMIT = 120_000;
+
+type CustomImageTerminalConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "closed"
+  | "error";
+
+function appendTerminalQuery(path: string, params: Record<string, string | number>) {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}${new URLSearchParams(
+    Object.fromEntries(Object.entries(params).map(([key, value]) => [key, String(value)])),
+  ).toString()}`;
+}
+
+function appendTerminalOutput(current: string, chunk: string) {
+  const next = `${current}${chunk}`;
+  return next.length > CUSTOM_IMAGE_TERMINAL_SCROLLBACK_LIMIT
+    ? next.slice(-CUSTOM_IMAGE_TERMINAL_SCROLLBACK_LIMIT)
+    : next;
+}
+
+function parseTerminalFrame(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function terminalInputForKey(event: ReactKeyboardEvent<HTMLElement>): string | null {
+  if (event.metaKey || event.altKey) return null;
+
+  if (event.ctrlKey) {
+    const key = event.key.toLowerCase();
+    if (key.length === 1 && key >= "a" && key <= "z") {
+      return String.fromCharCode(key.charCodeAt(0) - 96);
+    }
+    return null;
+  }
+
+  switch (event.key) {
+    case "Enter":
+      return "\r";
+    case "Backspace":
+      return "\x7f";
+    case "Tab":
+      return "\t";
+    case "Escape":
+      return "\x1b";
+    case "ArrowUp":
+      return "\x1b[A";
+    case "ArrowDown":
+      return "\x1b[B";
+    case "ArrowRight":
+      return "\x1b[C";
+    case "ArrowLeft":
+      return "\x1b[D";
+    case "Home":
+      return "\x1b[H";
+    case "End":
+      return "\x1b[F";
+    case "Delete":
+      return "\x1b[3~";
+    default:
+      return event.key.length === 1 ? event.key : null;
+  }
+}
+
+function customImageTerminalStatusCopy(state: CustomImageTerminalConnectionState) {
+  switch (state) {
+    case "connecting":
+      return "Connecting";
+    case "connected":
+      return "Connected";
+    case "closed":
+      return "Closed";
+    case "error":
+      return "Connection failed";
+    case "idle":
+    default:
+      return "Ready to connect";
+  }
+}
+
+function EnvironmentCustomImageBrowserTerminal({
+  sessionId,
+}: {
+  sessionId: string;
+}) {
+  const [connectionState, setConnectionState] = useState<CustomImageTerminalConnectionState>("idle");
+  const [output, setOutput] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const terminalRef = useRef<HTMLDivElement | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+
+  const closeSocket = useCallback((reason = "operator_closed") => {
+    const socket = socketRef.current;
+    socketRef.current = null;
+    if (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+      socket.close(1000, reason);
+    }
+  }, []);
+
+  useEffect(() => () => closeSocket("component_unmounted"), [closeSocket]);
+
+  useEffect(() => {
+    closeSocket("session_changed");
+    setConnectionState("idle");
+    setOutput("");
+    setErrorMessage(null);
+  }, [closeSocket, sessionId]);
+
+  useEffect(() => {
+    if (connectionState === "connected") {
+      terminalRef.current?.focus();
+    }
+  }, [connectionState]);
+
+  const connectTerminal = useCallback(async () => {
+    if (typeof WebSocket === "undefined") {
+      setConnectionState("error");
+      setErrorMessage("Browser terminal is unavailable in this browser.");
+      return;
+    }
+
+    closeSocket("reconnect");
+    setConnectionState("connecting");
+    setOutput("");
+    setErrorMessage(null);
+
+    try {
+      const terminalToken = await environmentsApi.createCustomImageTerminalSessionToken(sessionId, {});
+      const websocketPath = appendTerminalQuery(terminalToken.websocketPath, {
+        cols: CUSTOM_IMAGE_TERMINAL_COLS,
+        rows: CUSTOM_IMAGE_TERMINAL_ROWS,
+      });
+      const socket = new WebSocket(buildSameOriginWebSocketUrl(websocketPath));
+      socketRef.current = socket;
+
+      socket.onmessage = (message) => {
+        if (socketRef.current !== socket) return;
+        const raw = typeof message.data === "string" ? message.data : "";
+        const frame = raw ? parseTerminalFrame(raw) : null;
+        if (!frame) return;
+
+        if (frame.type === "ready") {
+          setConnectionState("connected");
+          return;
+        }
+
+        if (frame.type === "output" && typeof frame.data === "string") {
+          setOutput((current) => appendTerminalOutput(current, frame.data as string));
+          return;
+        }
+
+        if (frame.type === "error") {
+          setConnectionState("error");
+          setErrorMessage(typeof frame.message === "string" ? frame.message : "Terminal connection failed.");
+          return;
+        }
+
+        if (frame.type === "closed") {
+          setConnectionState("closed");
+          setErrorMessage(typeof frame.reason === "string" ? frame.reason : null);
+        }
+      };
+
+      socket.onclose = () => {
+        if (socketRef.current !== socket) return;
+        socketRef.current = null;
+        setConnectionState((current) => current === "connected" || current === "connecting" ? "closed" : current);
+      };
+
+      socket.onerror = () => {
+        if (socketRef.current !== socket) return;
+        setConnectionState("error");
+        setErrorMessage("Terminal websocket connection failed.");
+      };
+    } catch (error) {
+      setConnectionState("error");
+      setErrorMessage(error instanceof Error ? error.message : "Terminal session could not be opened.");
+    }
+  }, [closeSocket, sessionId]);
+
+  const sendTerminalInput = useCallback((data: string) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: "input", data }));
+  }, []);
+
+  const handleTerminalKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const input = terminalInputForKey(event);
+    if (!input) return;
+    event.preventDefault();
+    sendTerminalInput(input);
+  }, [sendTerminalInput]);
+
+  const disconnectTerminal = useCallback(() => {
+    closeSocket("operator_closed");
+    setConnectionState("closed");
+  }, [closeSocket]);
+
+  const terminalInteractive = connectionState === "connected";
+  const terminalDisplay = output || customImageTerminalStatusCopy(connectionState);
+
+  return (
+    <div className="mt-3 rounded-md border border-border/70 bg-background" data-testid={`custom-image-terminal-${sessionId}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs">
+          <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="font-medium">Browser terminal</span>
+          <span className="text-muted-foreground">{customImageTerminalStatusCopy(connectionState)}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {terminalInteractive ? (
+            <Button size="sm" variant="ghost" onClick={disconnectTerminal}>
+              Disconnect
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void connectTerminal()}
+              disabled={connectionState === "connecting"}
+            >
+              <Terminal className="mr-1.5 h-3.5 w-3.5" />
+              {connectionState === "closed" || connectionState === "error" ? "Reconnect" : "Open terminal"}
+            </Button>
+          )}
+        </div>
+      </div>
+      <div
+        ref={terminalRef}
+        data-testid={`custom-image-terminal-input-${sessionId}`}
+        role="textbox"
+        aria-label="Custom image browser terminal"
+        aria-multiline="true"
+        tabIndex={terminalInteractive ? 0 : -1}
+        onKeyDown={handleTerminalKeyDown}
+        className="min-h-[18rem] max-h-[26rem] overflow-auto bg-neutral-950 px-3 py-2 font-mono text-[12px] leading-5 text-neutral-100 outline-none focus:ring-2 focus:ring-ring"
+      >
+        <pre className="whitespace-pre-wrap break-words">{terminalDisplay}</pre>
+      </div>
+      {errorMessage ? (
+        <div className="border-t border-border/60 px-3 py-2 text-xs text-destructive">
+          {errorMessage}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function capabilityState(capability: EnvironmentProviderCapability | null | undefined) {
@@ -521,6 +781,9 @@ function EnvironmentImageTemplatePanel({
             </Button>
           </div>
         </div>
+        {session.status === "waiting_for_user" && connectionPayload?.type === "ssh" ? (
+          <EnvironmentCustomImageBrowserTerminal sessionId={session.id} />
+        ) : null}
         {session.status === "waiting_for_user" && connectionCommand ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md bg-muted/30 px-3 py-2">
             <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] leading-5">
