@@ -90,9 +90,12 @@ export {
   environmentCustomImageService,
 } from "./environment-custom-images.js";
 export {
+  environmentCustomImageTerminalConnectionRegistry,
   environmentCustomImageTerminalSessionStore,
+  EnvironmentCustomImageTerminalConnectionRegistry,
   EnvironmentCustomImageTerminalSessionStore,
   parseCustomImageSetupSshCommand,
+  type EnvironmentCustomImageTerminalConnectionClose,
   type EnvironmentCustomImageTerminalSessionRecord,
   type MintedEnvironmentCustomImageTerminalSession,
   type ParsedCustomImageSetupSshCommand,

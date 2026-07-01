@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 const DEFAULT_TERMINAL_SESSION_TOKEN_TTL_MS = 5 * 60 * 1000;
 const TERMINAL_SESSION_TOKEN_BYTES = 32;
@@ -9,7 +9,28 @@ export interface ParsedCustomImageSetupSshCommand {
   port: number;
 }
 
+export type EnvironmentCustomImageTerminalPayloadValidationFailureCode =
+  | "unsupported_payload"
+  | "missing_command"
+  | "unsupported_command"
+  | "invalid_expiry"
+  | "expired_payload";
+
+export type EnvironmentCustomImageTerminalPayloadValidationResult =
+  | {
+      ok: true;
+      ssh: ParsedCustomImageSetupSshCommand;
+      connectionExpiresAt: Date | null;
+    }
+  | {
+      ok: false;
+      status: 409 | 422;
+      code: EnvironmentCustomImageTerminalPayloadValidationFailureCode;
+      message: string;
+    };
+
 export interface EnvironmentCustomImageTerminalSessionRecord {
+  id: string;
   setupSessionId: string;
   companyId: string;
   environmentId: string;
@@ -22,6 +43,11 @@ export interface EnvironmentCustomImageTerminalSessionRecord {
 
 export interface MintedEnvironmentCustomImageTerminalSession {
   token: string;
+  session: EnvironmentCustomImageTerminalSessionRecord;
+}
+
+interface StoredEnvironmentCustomImageTerminalSession {
+  tokenHash: string;
   session: EnvironmentCustomImageTerminalSessionRecord;
 }
 
@@ -68,6 +94,73 @@ export function parseCustomImageSetupSshCommand(command: string): ParsedCustomIm
   return null;
 }
 
+function readConnectionPayload(payload: unknown): Record<string, unknown> | null {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
+}
+
+function readDate(value: unknown): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : typeof value === "string" ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+export function validateCustomImageSetupSshPayload(
+  payload: unknown,
+  now: Date,
+): EnvironmentCustomImageTerminalPayloadValidationResult {
+  const record = readConnectionPayload(payload);
+  if (!record || record.type !== "ssh") {
+    return {
+      ok: false,
+      status: 422,
+      code: "unsupported_payload",
+      message: "Setup session terminal connections require an SSH connection payload.",
+    };
+  }
+
+  const command = typeof record.command === "string" ? record.command.trim() : "";
+  if (!command) {
+    return {
+      ok: false,
+      status: 422,
+      code: "missing_command",
+      message: "Setup session SSH payload is missing a supported command.",
+    };
+  }
+
+  const ssh = parseCustomImageSetupSshCommand(command);
+  if (!ssh) {
+    return {
+      ok: false,
+      status: 422,
+      code: "unsupported_command",
+      message: "Setup session SSH payload uses an unsupported command shape.",
+    };
+  }
+
+  const connectionExpiresAt = readDate(record.expiresAt);
+  if (record.expiresAt != null && !connectionExpiresAt) {
+    return {
+      ok: false,
+      status: 422,
+      code: "invalid_expiry",
+      message: "Setup session SSH payload has an invalid expiry.",
+    };
+  }
+  if (connectionExpiresAt && connectionExpiresAt.getTime() <= now.getTime()) {
+    return {
+      ok: false,
+      status: 409,
+      code: "expired_payload",
+      message: "Setup session SSH connection payload has expired.",
+    };
+  }
+
+  return { ok: true, ssh, connectionExpiresAt };
+}
+
 function hashTerminalSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -84,7 +177,7 @@ function toValidFutureDate(value: Date | string | null | undefined, now: Date): 
 }
 
 export class EnvironmentCustomImageTerminalSessionStore {
-  private readonly sessions = new Map<string, EnvironmentCustomImageTerminalSessionRecord>();
+  private readonly sessionsById = new Map<string, StoredEnvironmentCustomImageTerminalSession>();
 
   create(input: {
     setupSessionId: string;
@@ -106,7 +199,9 @@ export class EnvironmentCustomImageTerminalSessionStore {
     ].filter((date): date is Date => date !== null);
     const expiresAt = minDate(candidateExpirations);
     const token = randomBytes(TERMINAL_SESSION_TOKEN_BYTES).toString("base64url");
+    const id = randomUUID();
     const session: EnvironmentCustomImageTerminalSessionRecord = {
+      id,
       setupSessionId: input.setupSessionId,
       companyId: input.companyId,
       environmentId: input.environmentId,
@@ -116,32 +211,57 @@ export class EnvironmentCustomImageTerminalSessionStore {
       createdAt: now,
       expiresAt,
     };
-    this.sessions.set(hashTerminalSessionToken(token), session);
+    this.sessionsById.set(id, {
+      tokenHash: hashTerminalSessionToken(token),
+      session,
+    });
     return { token, session };
   }
 
-  get(token: string, now = new Date()): EnvironmentCustomImageTerminalSessionRecord | null {
-    if (!token) return null;
-    const key = hashTerminalSessionToken(token);
-    const session = this.sessions.get(key) ?? null;
-    if (!session) return null;
-    if (session.expiresAt.getTime() <= now.getTime()) {
-      this.sessions.delete(key);
+  get(input: { id: string; token: string }, now = new Date()): EnvironmentCustomImageTerminalSessionRecord | null {
+    if (!input.id || !input.token) return null;
+    const stored = this.sessionsById.get(input.id) ?? null;
+    if (!stored) return null;
+    if (stored.tokenHash !== hashTerminalSessionToken(input.token)) return null;
+    if (stored.session.expiresAt.getTime() <= now.getTime()) {
+      this.sessionsById.delete(input.id);
       return null;
     }
-    return session;
+    return stored.session;
   }
 
-  delete(token: string): boolean {
-    if (!token) return false;
-    return this.sessions.delete(hashTerminalSessionToken(token));
+  getById(id: string, now = new Date()): EnvironmentCustomImageTerminalSessionRecord | null {
+    if (!id) return null;
+    const stored = this.sessionsById.get(id) ?? null;
+    if (!stored) return null;
+    if (stored.session.expiresAt.getTime() <= now.getTime()) {
+      this.sessionsById.delete(id);
+      return null;
+    }
+    return stored.session;
+  }
+
+  delete(id: string): boolean {
+    if (!id) return false;
+    return this.sessionsById.delete(id);
+  }
+
+  deleteBySetupSessionId(setupSessionId: string): number {
+    if (!setupSessionId) return 0;
+    let removed = 0;
+    for (const [id, stored] of this.sessionsById) {
+      if (stored.session.setupSessionId !== setupSessionId) continue;
+      this.sessionsById.delete(id);
+      removed += 1;
+    }
+    return removed;
   }
 
   cleanupExpired(now = new Date()): number {
     let removed = 0;
-    for (const [key, session] of this.sessions) {
-      if (session.expiresAt.getTime() <= now.getTime()) {
-        this.sessions.delete(key);
+    for (const [id, stored] of this.sessionsById) {
+      if (stored.session.expiresAt.getTime() <= now.getTime()) {
+        this.sessionsById.delete(id);
         removed += 1;
       }
     }
@@ -149,9 +269,60 @@ export class EnvironmentCustomImageTerminalSessionStore {
   }
 
   clear(): void {
-    this.sessions.clear();
+    this.sessionsById.clear();
   }
 }
 
 export const environmentCustomImageTerminalSessionStore =
   new EnvironmentCustomImageTerminalSessionStore();
+
+export type EnvironmentCustomImageTerminalConnectionClose = (reason: string) => void;
+
+export class EnvironmentCustomImageTerminalConnectionRegistry {
+  private readonly connectionsBySetupSessionId = new Map<string, Set<EnvironmentCustomImageTerminalConnectionClose>>();
+
+  add(input: {
+    setupSessionId: string;
+    close: EnvironmentCustomImageTerminalConnectionClose;
+  }): () => void {
+    const existing = this.connectionsBySetupSessionId.get(input.setupSessionId);
+    const connections = existing ?? new Set<EnvironmentCustomImageTerminalConnectionClose>();
+    connections.add(input.close);
+    if (!existing) {
+      this.connectionsBySetupSessionId.set(input.setupSessionId, connections);
+    }
+
+    return () => {
+      connections.delete(input.close);
+      if (connections.size === 0) {
+        this.connectionsBySetupSessionId.delete(input.setupSessionId);
+      }
+    };
+  }
+
+  closeBySetupSessionId(setupSessionId: string, reason: string): number {
+    const connections = this.connectionsBySetupSessionId.get(setupSessionId);
+    if (!connections) return 0;
+    let closed = 0;
+    for (const close of [...connections]) {
+      close(reason);
+      closed += 1;
+    }
+    return closed;
+  }
+
+  closeAll(reason: string): number {
+    let closed = 0;
+    for (const setupSessionId of [...this.connectionsBySetupSessionId.keys()]) {
+      closed += this.closeBySetupSessionId(setupSessionId, reason);
+    }
+    return closed;
+  }
+
+  clear(): void {
+    this.connectionsBySetupSessionId.clear();
+  }
+}
+
+export const environmentCustomImageTerminalConnectionRegistry =
+  new EnvironmentCustomImageTerminalConnectionRegistry();

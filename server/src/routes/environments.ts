@@ -23,8 +23,10 @@ import {
   projectService,
 } from "../services/index.js";
 import {
+  environmentCustomImageTerminalConnectionRegistry,
   environmentCustomImageTerminalSessionStore,
-  parseCustomImageSetupSshCommand,
+  validateCustomImageSetupSshPayload,
+  type EnvironmentCustomImageTerminalPayloadValidationResult,
 } from "../services/environment-custom-image-terminal-sessions.js";
 import {
   collectEnvironmentSecretRefs,
@@ -312,10 +314,13 @@ export function environmentRoutes(
     return expiresAt;
   }
 
-  function readConnectionPayload(payload: unknown): Record<string, unknown> | null {
-    return payload && typeof payload === "object" && !Array.isArray(payload)
-      ? payload as Record<string, unknown>
-      : null;
+  function throwTerminalPayloadValidationFailure(
+    failure: Extract<EnvironmentCustomImageTerminalPayloadValidationResult, { ok: false }>,
+  ): never {
+    if (failure.status === 409) {
+      throw conflict(failure.message);
+    }
+    throw unprocessable(failure.message);
   }
 
   router.get("/companies/:companyId/environments", async (req, res) => {
@@ -436,24 +441,9 @@ export function environmentRoutes(
         throw conflict(`Cannot create terminal session token from setup status "${refreshed.session.status}".`);
       }
       const setupExpiresAt = requireFutureSetupExpiry(refreshed.session, now);
-      const payload = readConnectionPayload(refreshed.connectionPayload);
-      if (!payload || payload.type !== "ssh") {
-        throw unprocessable("Setup session terminal connections require an SSH connection payload.");
-      }
-      const command = typeof payload.command === "string" ? payload.command.trim() : "";
-      if (!command) {
-        throw unprocessable("Setup session SSH payload is missing a supported command.");
-      }
-      const ssh = parseCustomImageSetupSshCommand(command);
-      if (!ssh) {
-        throw unprocessable("Setup session SSH payload uses an unsupported command shape.");
-      }
-      const connectionExpiresAt = readDate(payload.expiresAt);
-      if (payload.expiresAt != null && !connectionExpiresAt) {
-        throw unprocessable("Setup session SSH payload has an invalid expiry.");
-      }
-      if (connectionExpiresAt && connectionExpiresAt.getTime() <= now.getTime()) {
-        throw conflict("Setup session SSH connection payload has expired.");
+      const payloadValidation = validateCustomImageSetupSshPayload(refreshed.connectionPayload, now);
+      if (!payloadValidation.ok) {
+        throwTerminalPayloadValidationFailure(payloadValidation);
       }
 
       const minted = environmentCustomImageTerminalSessionStore.create({
@@ -461,9 +451,9 @@ export function environmentRoutes(
         companyId: refreshed.session.companyId,
         environmentId: refreshed.session.environmentId,
         provider: refreshed.session.provider,
-        ssh,
+        ssh: payloadValidation.ssh,
         setupExpiresAt,
-        connectionExpiresAt,
+        connectionExpiresAt: payloadValidation.connectionExpiresAt,
         now,
       });
       const actor = getActorInfo(req);
@@ -481,11 +471,15 @@ export function environmentRoutes(
         },
       });
       res.status(201).json({
+        id: minted.session.id,
         token: minted.token,
         expiresAt: minted.session.expiresAt.toISOString(),
         setupSessionId: minted.session.setupSessionId,
         environmentId: minted.session.environmentId,
         connectionType: "ssh",
+        websocketPath:
+          `/api/environment-custom-image-setup-sessions/${encodeURIComponent(minted.session.setupSessionId)}/terminal/ws`
+          + `?terminalSessionId=${encodeURIComponent(minted.session.id)}&token=${encodeURIComponent(minted.token)}`,
       });
     },
   );
@@ -506,6 +500,8 @@ export function environmentRoutes(
         sessionId: session.id,
         metadata: req.body.metadata,
       });
+      environmentCustomImageTerminalSessionStore.deleteBySetupSessionId(session.id);
+      environmentCustomImageTerminalConnectionRegistry.closeBySetupSessionId(session.id, "setup_finished");
       await logEnvironmentCustomImageActivity({
         actor,
         companyId: session.companyId,
@@ -536,6 +532,8 @@ export function environmentRoutes(
         sessionId: session.id,
         reason: req.body.reason ?? null,
       });
+      environmentCustomImageTerminalSessionStore.deleteBySetupSessionId(session.id);
+      environmentCustomImageTerminalConnectionRegistry.closeBySetupSessionId(session.id, "setup_cancelled");
       await logEnvironmentCustomImageActivity({
         actor,
         companyId: session.companyId,

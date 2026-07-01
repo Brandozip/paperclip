@@ -172,6 +172,27 @@ function createTemplate(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function supportedDaytonaCapabilities() {
+  return {
+    adapters: [],
+    drivers: { local: "supported", ssh: "supported", sandbox: "supported", plugin: "unsupported" },
+    sandboxProviders: {
+      daytona: {
+        status: "supported",
+        supportsSavedProbe: true,
+        supportsUnsavedProbe: true,
+        supportsRunExecution: true,
+        supportsReusableLeases: true,
+        supportsInteractiveSetup: true,
+        interactiveSetupConnectionTypes: ["ssh"],
+        supportsTemplateCapture: true,
+        supportsTemplateDelete: true,
+        displayName: "Daytona",
+      },
+    },
+  };
+}
+
 describe("CompanyEnvironments — test provider button", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot> | null;
@@ -599,6 +620,84 @@ describe("CompanyEnvironments — test provider button", () => {
       expect(getOpenDialog()?.textContent).toContain("Setup expired");
     });
     expect(getOpenDialog()?.textContent).not.toContain(command);
+  });
+
+  it("shows a setup connection refresh fallback without breaking finish or cancel", async () => {
+    root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    mockEnvironmentsApi.list.mockResolvedValue([
+      { id: "env-1", name: "Daytona", driver: "sandbox", description: null, config: { provider: "daytona" } },
+    ]);
+    mockEnvironmentsApi.capabilities.mockResolvedValue(supportedDaytonaCapabilities());
+    mockEnvironmentsApi.customImageTemplate.mockResolvedValue({
+      activeTemplate: null,
+      activeSession: createSession(),
+      latestSession: createSession(),
+    });
+    mockEnvironmentsApi.customImageSetupSession.mockRejectedValue(new Error("proxy unavailable"));
+
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <CompanyEnvironments />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    await act(async () => click(editButtons(container)[0]));
+    await waitForAssertion(() => {
+      expect(getOpenDialog()?.textContent).toContain("Setup connection details could not be refreshed.");
+    });
+
+    const dialog = getOpenDialog()!;
+    expect(findButton(dialog, "Finished")?.disabled).toBe(false);
+    expect(findButton(dialog, "Cancel")?.disabled).toBe(false);
+
+    await act(async () => click(findButton(dialog, "Finished")));
+    await flushReact();
+
+    expect(mockEnvironmentsApi.finishCustomImageSetupSession).toHaveBeenCalledExactlyOnceWith("session-1", {});
+  });
+
+  it("shows provider fallback messaging for unsupported setup connection payloads", async () => {
+    root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    mockEnvironmentsApi.list.mockResolvedValue([
+      { id: "env-1", name: "Daytona", driver: "sandbox", description: null, config: { provider: "daytona" } },
+    ]);
+    mockEnvironmentsApi.capabilities.mockResolvedValue(supportedDaytonaCapabilities());
+    mockEnvironmentsApi.customImageTemplate.mockResolvedValue({
+      activeTemplate: null,
+      activeSession: createSession(),
+      latestSession: createSession(),
+    });
+    mockEnvironmentsApi.customImageSetupSession.mockResolvedValue({
+      session: createSession(),
+      connectionPayload: { type: "browser_terminal", command: null },
+    });
+
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <CompanyEnvironments />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    await act(async () => click(editButtons(container)[0]));
+    await waitForAssertion(() => {
+      expect(getOpenDialog()?.textContent).toContain("Browser terminal is not available for this provider connection.");
+    });
+
+    const dialog = getOpenDialog()!;
+    expect(findButton(dialog, "Finished")?.disabled).toBe(false);
+    expect(findButton(dialog, "Cancel")?.disabled).toBe(false);
   });
 
   it("shows active template controls for refresh, rollback, and disable", async () => {

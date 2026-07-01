@@ -12,6 +12,7 @@ export const API = {
   environmentCustomImageSetupSessions: `${API_PREFIX}/environments/:environmentId/custom-image-setup-sessions`,
   environmentCustomImageSetupSession: `${API_PREFIX}/environment-custom-image-setup-sessions/:sessionId`,
   environmentCustomImageSetupSessionTerminalToken: `${API_PREFIX}/environment-custom-image-setup-sessions/:sessionId/terminal-session-token`,
+  environmentCustomImageSetupSessionTerminalWs: `${API_PREFIX}/environment-custom-image-setup-sessions/:sessionId/terminal/ws`,
   environmentCustomImageSetupSessionFinish: `${API_PREFIX}/environment-custom-image-setup-sessions/:sessionId/finish`,
   environmentCustomImageSetupSessionCancel: `${API_PREFIX}/environment-custom-image-setup-sessions/:sessionId/cancel`,
   issues: `${API_PREFIX}/issues`,

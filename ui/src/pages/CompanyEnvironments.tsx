@@ -199,6 +199,27 @@ function readConnectionCommand(payload: EnvironmentCustomImageConnectionPayload 
     : null;
 }
 
+function setupConnectionFallbackMessage(input: {
+  payload: EnvironmentCustomImageConnectionPayload | null;
+  refreshError: unknown;
+  isLoading: boolean;
+}): string | null {
+  if (input.refreshError) {
+    return "Setup connection details could not be refreshed. You can still finish or cancel this setup.";
+  }
+  if (input.isLoading) return null;
+  if (!input.payload) {
+    return "Connection details are not available yet. You can still finish or cancel this setup.";
+  }
+  if (input.payload.type !== "ssh") {
+    return "Browser terminal is not available for this provider connection. Use the provider setup instructions, then finish or cancel here.";
+  }
+  if (!readConnectionCommand(input.payload)) {
+    return "Connection details are not available yet. You can still finish or cancel this setup.";
+  }
+  return null;
+}
+
 function capabilityState(capability: EnvironmentProviderCapability | null | undefined) {
   if (!capability || capability.status !== "supported" || !capability.supportsInteractiveSetup) {
     return {
@@ -451,6 +472,13 @@ function EnvironmentImageTemplatePanel({
     ? sessionQuery.data?.connectionPayload ?? null
     : null;
   const connectionCommand = readConnectionCommand(connectionPayload);
+  const connectionFallbackMessage = session?.status === "waiting_for_user"
+    ? setupConnectionFallbackMessage({
+        payload: connectionPayload,
+        refreshError: sessionQuery.isError ? sessionQuery.error : null,
+        isLoading: sessionQuery.isLoading,
+      })
+    : null;
   const sessionExpiresAt = formatDateTime(connectionPayload?.expiresAt ?? session?.expiresAt ?? null);
   const capturedAt = formatDateTime(activeTemplate?.capturedAt ?? activeTemplate?.createdAt ?? null);
   const lastUsedAt = formatDateTime(activeTemplate?.lastUsedAt ?? null);
@@ -500,9 +528,9 @@ function EnvironmentImageTemplatePanel({
             </code>
           </div>
         ) : null}
-        {session.status === "waiting_for_user" && !connectionCommand ? (
+        {session.status === "waiting_for_user" && connectionFallbackMessage ? (
           <div className="mt-2 text-xs text-muted-foreground">
-            Connection details are not available yet.
+            {connectionFallbackMessage}
           </div>
         ) : null}
         {session.failureReason ? (
