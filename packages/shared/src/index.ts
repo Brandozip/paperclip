@@ -639,6 +639,7 @@ export type {
   ExternalObjectMentionGroup,
   ExternalObjectSummary,
   ExternalObjectSummaryItem,
+  CompactIssue,
   Issue,
   IssueAssigneeAdapterOverrides,
   IssueBlockerDiagnosticFlag,

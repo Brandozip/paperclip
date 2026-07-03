@@ -774,6 +774,54 @@ export interface Issue {
   updatedAt: Date;
 }
 
+export type CompactIssue = Pick<
+  Issue,
+  | "id"
+  | "companyId"
+  | "projectId"
+  | "projectWorkspaceId"
+  | "goalId"
+  | "parentId"
+  | "title"
+  | "status"
+  | "workMode"
+  | "priority"
+  | "assigneeAgentId"
+  | "assigneeUserId"
+  | "checkoutRunId"
+  | "executionRunId"
+  | "executionAgentNameKey"
+  | "executionLockedAt"
+  | "createdByAgentId"
+  | "createdByUserId"
+  | "issueNumber"
+  | "identifier"
+  | "originKind"
+  | "originId"
+  | "originRunId"
+  | "requestDepth"
+  | "billingCode"
+  | "executionWorkspaceId"
+  | "startedAt"
+  | "completedAt"
+  | "cancelledAt"
+  | "createdAt"
+  | "updatedAt"
+> & {
+  labelIds?: string[];
+  labels?: IssueLabel[];
+  blockedBy?: IssueRelationIssueSummary[];
+  blockerAttention?: IssueBlockerAttention;
+  blockedInboxAttention?: IssueBlockedInboxAttention | null;
+  productivityReview?: IssueProductivityReview | null;
+  scheduledRetry?: IssueScheduledRetry | null;
+  liveDescendantCount?: number;
+  myLastTouchAt?: Date | null;
+  lastExternalCommentAt?: Date | null;
+  lastActivityAt?: Date | null;
+  isUnreadForMe?: boolean;
+};
+
 /**
  * Where a comment's derived (non-stored-author) agent attribution came from,
  * in descending confidence:

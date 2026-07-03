@@ -135,6 +135,87 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
     expect(res.body.map((issue: { id: string }) => issue.id)).toEqual([unassignedIssueId]);
   });
 
+  it("returns compact issue list rows without detail-only fields", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: uniqueIssuePrefix(),
+      requireBoardApprovalForNewAgents: false,
+    });
+    await seedCloudTenantMember(companyId);
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Compact issue",
+      description: "This long detail belongs on the issue detail endpoint, not the board list.",
+      status: "todo",
+      priority: "medium",
+      billingCode: "product",
+    });
+
+    const app = createApp(companyId);
+    const res = await request(app)
+      .get(`/api/companies/${companyId}/issues`)
+      .query({ view: "compact", limit: "20" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.headers.etag).toMatch(/^"compact-issues:/);
+    expect(res.headers["cache-control"]).toBe("private, must-revalidate");
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      id: issueId,
+      companyId,
+      title: "Compact issue",
+      status: "todo",
+      priority: "medium",
+      billingCode: "product",
+    });
+    expect(res.body[0]).not.toHaveProperty("description");
+    expect(res.body[0]).not.toHaveProperty("workProducts");
+    expect(res.body[0]).not.toHaveProperty("project");
+    expect(res.body[0]).not.toHaveProperty("goal");
+    expect(res.body[0]).not.toHaveProperty("activeRecoveryAction");
+    expect(res.body[0]).not.toHaveProperty("successfulRunHandoff");
+  });
+
+  it("returns 304 for unchanged compact issue list ETags", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: uniqueIssuePrefix(),
+      requireBoardApprovalForNewAgents: false,
+    });
+    await seedCloudTenantMember(companyId);
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Cached compact issue",
+      status: "todo",
+      priority: "medium",
+    });
+
+    const app = createApp(companyId);
+    const first = await request(app)
+      .get(`/api/companies/${companyId}/issues`)
+      .query({ view: "compact", limit: "20" });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.headers.etag).toBeTruthy();
+
+    const second = await request(app)
+      .get(`/api/companies/${companyId}/issues`)
+      .query({ view: "compact", limit: "20" })
+      .set("If-None-Match", first.headers.etag);
+
+    expect(second.status).toBe(304);
+    expect(second.text).toBe("");
+  });
+
   it("keeps UUID assignee filtering behavior unchanged", async () => {
     const companyId = randomUUID();
     const assigneeAgentId = randomUUID();
