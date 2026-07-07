@@ -59,6 +59,18 @@ function statusAllowsBody(statusCode: number): boolean {
   return statusCode !== 204 && statusCode !== 304 && statusCode >= 200;
 }
 
+function shouldPassthroughWrite(res: Parameters<RequestHandler>[1]): boolean {
+  const contentType = res.getHeader("Content-Type");
+  const alreadyEncoded = res.hasHeader("Content-Encoding") && String(res.getHeader("Content-Encoding")).toLowerCase() !== "identity";
+  return (
+    alreadyEncoded ||
+    !statusAllowsBody(res.statusCode) ||
+    shouldSkipForCacheControl(res.getHeader("Cache-Control")) ||
+    contentType === undefined ||
+    !isJsonContentType(contentType)
+  );
+}
+
 function normalizeEndArgs(args: unknown[]): {
   chunk: unknown;
   encoding: BufferEncoding | undefined;
@@ -103,8 +115,22 @@ export function apiCompression(options: ApiCompressionOptions = {}): RequestHand
       }
     };
 
+    const beginPassthrough = () => {
+      if (passthrough) return;
+      passthrough = true;
+      restore();
+      for (const buffered of chunks.splice(0)) {
+        originalWrite(buffered);
+      }
+      for (const writeCallback of writeCallbacks.splice(0)) writeCallback();
+    };
+
     res.write = ((chunk: unknown, encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
       if (passthrough) {
+        return originalWrite(chunk as never, encodingOrCallback as never, callback as never);
+      }
+      if (shouldPassthroughWrite(res)) {
+        beginPassthrough();
         return originalWrite(chunk as never, encodingOrCallback as never, callback as never);
       }
       if (chunk !== undefined) {
@@ -143,7 +169,6 @@ export function apiCompression(options: ApiCompressionOptions = {}): RequestHand
       res.setHeader("Content-Encoding", selectedEncoding);
       res.setHeader("Content-Length", String(compressed.length));
       res.removeHeader("Content-MD5");
-      res.removeHeader("ETag");
       const result = originalEnd(compressed, callback);
       for (const writeCallback of writeCallbacks) writeCallback();
       return result;

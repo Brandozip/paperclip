@@ -173,11 +173,11 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
       id: issueId,
       companyId,
       title: "Compact issue",
+      description: "This long detail belongs on the issue detail endpoint, not the board list.",
       status: "todo",
       priority: "medium",
       billingCode: "product",
     });
-    expect(res.body[0]).not.toHaveProperty("description");
     expect(res.body[0]).not.toHaveProperty("workProducts");
     expect(res.body[0]).not.toHaveProperty("project");
     expect(res.body[0]).not.toHaveProperty("goal");

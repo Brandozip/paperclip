@@ -783,6 +783,7 @@ export type CompactIssue = Pick<
   | "goalId"
   | "parentId"
   | "title"
+  | "description"
   | "status"
   | "workMode"
   | "priority"

@@ -2021,6 +2021,7 @@ function toCompactIssue(issue: any): CompactIssue {
     goalId: issue.goalId,
     parentId: issue.parentId,
     title: issue.title,
+    description: issue.description,
     status: issue.status,
     workMode: issue.workMode,
     priority: issue.priority,
@@ -2166,11 +2167,17 @@ function normalizeIssueListCacheValue(value: unknown): unknown {
 
 function issueListActorIdentity(req: Request, companyId: string) {
   if (req.actor.type === "agent") {
+    const onBehalfMembership = req.actor.onBehalfOfUserId
+      ? req.actor.onBehalfOfMemberships?.find((membership) => membership.companyId === companyId) ?? null
+      : null;
     const key = [
       "agent",
       companyId,
       req.actor.agentId ?? "unknown-agent",
       req.actor.keyId ?? req.actor.source ?? "agent-auth",
+      req.actor.onBehalfOfUserId ?? "no-responsible-user",
+      onBehalfMembership?.status ?? "no-responsible-user-status",
+      onBehalfMembership?.membershipRole ?? "no-responsible-user-role",
     ].join(":");
     return { actorType: "agent", key, hash: shortHash(key) };
   }

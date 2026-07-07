@@ -89,6 +89,15 @@ function buildApp() {
     res.setHeader("Content-Encoding", "deflate");
     res.end(deflateSync(body));
   });
+  app.get("/api/etag", (_req, res) => {
+    res.setHeader("ETag", "\"fixture-etag\"");
+    res.json(issueListFixture(500));
+  });
+  app.get("/api/download", (_req, res) => {
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.write("chunk-one:");
+    res.end("chunk-two");
+  });
   return app;
 }
 
@@ -135,5 +144,26 @@ describe("API compression middleware", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-encoding"]).toBe("deflate");
     expect(JSON.parse(inflateSync(res.body).toString("utf8"))).toEqual({ already: "encoded" });
+  });
+
+  it("preserves ETag validators on compressed JSON responses", async () => {
+    const res = await requestRaw(buildApp(), "/api/etag", {
+      "accept-encoding": "gzip",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-encoding"]).toBe("gzip");
+    expect(res.headers.etag).toBe("\"fixture-etag\"");
+    expect(JSON.parse(gunzipSync(res.body).toString("utf8"))).toHaveLength(500);
+  });
+
+  it("passes streamed non-JSON responses through without compression", async () => {
+    const res = await requestRaw(buildApp(), "/api/download", {
+      "accept-encoding": "gzip, deflate",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-encoding"]).toBeUndefined();
+    expect(res.body.toString("utf8")).toBe("chunk-one:chunk-two");
   });
 });

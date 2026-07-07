@@ -57,8 +57,8 @@ function releaseCoordinator(companyId: string): void {
   coordinators.delete(companyId);
 }
 
-function resourceKey(companyId: string, key: string): string {
-  return `${companyId}:${key}`;
+function resourceKey(companyId: string, key: string, queryKeyHash: string): string {
+  return `${companyId}:${key}:${queryKeyHash}`;
 }
 
 export function useSharedPollingQuery<TData>({
@@ -71,8 +71,8 @@ export function useSharedPollingQuery<TData>({
 }: SharedPollingQueryOptions): SharedPollingQueryState<TData> {
   const queryClient = useQueryClient();
   const activeCompanyId = enabled && companyId ? companyId : null;
-  const fullResourceKey = activeCompanyId ? resourceKey(activeCompanyId, rawResourceKey) : null;
   const queryKeyHash = useMemo(() => JSON.stringify(queryKey), [queryKey]);
+  const fullResourceKey = activeCompanyId ? resourceKey(activeCompanyId, rawResourceKey, queryKeyHash) : null;
   const queryKeyRef = useRef(queryKey);
   const [snapshot, setSnapshot] = useState<SharedPollingSnapshot>({ isLeader: !leaderOnly });
 
