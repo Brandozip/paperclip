@@ -223,6 +223,8 @@ interface IssueChatMessageContext {
   issueStatus?: string;
   successfulRunHandoff?: SuccessfulRunHandoffState | null;
   externalReferences?: MarkdownExternalReferenceMap;
+  /** Linkify `PAP-C7` case chips in comment bodies (experimental Cases flag). */
+  linkCaseReferences?: boolean;
 }
 
 const IssueChatCtx = createContext<IssueChatMessageContext>({
@@ -513,6 +515,8 @@ interface IssueChatThreadProps {
    */
   onRefreshLatestComments?: () => Promise<unknown> | void;
   externalReferences?: MarkdownExternalReferenceMap;
+  /** Linkify `PAP-C7` case chips in comment bodies (experimental Cases flag). */
+  linkCaseReferences?: boolean;
 }
 
 type IssueChatErrorBoundaryProps = {
@@ -774,7 +778,7 @@ function commentDateLabel(date: Date | string | undefined): string {
 }
 
 const IssueChatTextPart = memo(function IssueChatTextPart({ text, recessed, onAccent }: { text: string; recessed?: boolean; onAccent?: boolean }) {
-  const { onImageClick, externalReferences } = useContext(IssueChatCtx);
+  const { onImageClick, externalReferences, linkCaseReferences } = useContext(IssueChatCtx);
   if (isSuccessfulRunHandoffComment(text)) {
     return <SuccessfulRunHandoffCommentCallout text={text} recessed={recessed} onImageClick={onImageClick} />;
   }
@@ -785,6 +789,7 @@ const IssueChatTextPart = memo(function IssueChatTextPart({ text, recessed, onAc
       softBreaks
       onImageClick={onImageClick}
       externalReferences={externalReferences}
+      linkCaseReferences={linkCaseReferences}
     >
       {text}
     </WorkspaceFileMarkdownBody>
@@ -4212,6 +4217,7 @@ export function IssueChatThread({
   onResumeFromBacklog,
   resumeFromBacklogPending = false,
   externalReferences,
+  linkCaseReferences = false,
 }: IssueChatThreadProps) {
   const location = useLocation();
   const lastScrolledHashRef = useRef<string | null>(null);
@@ -4752,6 +4758,7 @@ export function IssueChatThread({
       issueStatus,
       successfulRunHandoff,
       externalReferences,
+      linkCaseReferences,
     }),
     [
       feedbackDataSharingPreference,
@@ -4778,6 +4785,7 @@ export function IssueChatThread({
       issueStatus,
       successfulRunHandoff,
       externalReferences,
+      linkCaseReferences,
     ],
   );
 
