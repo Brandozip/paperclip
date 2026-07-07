@@ -86,9 +86,14 @@ function coalescedGet<T>(path: string, options?: RequestOptions): Promise<T> {
     const promise = request<T>(path, { method: "GET", signal: controller.signal });
     const created: InflightGet = { promise, controller, refs: new Set() };
     // Clear the shared entry once settled so later calls issue a fresh request.
-    promise.finally(() => {
-      if (inflightGets.get(path) === created) inflightGets.delete(path);
-    });
+    promise.then(
+      () => {
+        if (inflightGets.get(path) === created) inflightGets.delete(path);
+      },
+      () => {
+        if (inflightGets.get(path) === created) inflightGets.delete(path);
+      },
+    );
     inflightGets.set(path, created);
     entry = created;
   }
