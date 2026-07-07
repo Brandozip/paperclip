@@ -72,7 +72,10 @@ vi.mock("@/lib/router", () => ({
 }));
 
 vi.mock("../api/issues", () => ({
-  issuesApi: mockIssuesApi,
+  issuesApi: {
+    ...mockIssuesApi,
+    listCompact: mockIssuesApi.list,
+  },
 }));
 
 vi.mock("../api/auth", () => ({

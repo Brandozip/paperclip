@@ -109,7 +109,7 @@ export async function fetchIssueDetail(
   issueRef: string,
   options?: { signal?: AbortSignal },
 ): Promise<Issue> {
-  const issue = await issuesApi.get(issueRef, options);
+  const issue = options ? await issuesApi.get(issueRef, options) : await issuesApi.get(issueRef);
   return seedIssueDetailCache(queryClient, issue, { issueRef });
 }
 

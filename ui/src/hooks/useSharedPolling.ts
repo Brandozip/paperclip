@@ -74,7 +74,7 @@ export function useSharedPollingQuery<TData>({
   const queryKeyHash = useMemo(() => JSON.stringify(queryKey), [queryKey]);
   const fullResourceKey = activeCompanyId ? resourceKey(activeCompanyId, rawResourceKey, queryKeyHash) : null;
   const queryKeyRef = useRef(queryKey);
-  const [snapshot, setSnapshot] = useState<SharedPollingSnapshot>({ isLeader: !leaderOnly });
+  const [snapshot, setSnapshot] = useState<SharedPollingSnapshot>({ isLeader: true });
 
   useEffect(() => {
     queryKeyRef.current = queryKey;
@@ -82,7 +82,7 @@ export function useSharedPollingQuery<TData>({
 
   useEffect(() => {
     if (!activeCompanyId || !fullResourceKey) {
-      setSnapshot({ isLeader: !leaderOnly });
+      setSnapshot({ isLeader: true });
       return;
     }
 
