@@ -23,6 +23,12 @@ describe("instance experimental settings validators", () => {
     expect(settings.enableGoalsSidebarLink).toBe(false);
   });
 
+  it("defaults built-in agents off", () => {
+    const settings = instanceExperimentalSettingsSchema.parse({});
+
+    expect(settings.enableBuiltInAgents).toBe(false);
+  });
+
   it("accepts server info debug view patches", () => {
     expect(
       patchInstanceExperimentalSettingsSchema.parse({
@@ -50,6 +56,16 @@ describe("instance experimental settings validators", () => {
       }),
     ).toEqual({
       enableGoalsSidebarLink: true,
+    });
+  });
+
+  it("accepts built-in agents patches", () => {
+    expect(
+      patchInstanceExperimentalSettingsSchema.parse({
+        enableBuiltInAgents: true,
+      }),
+    ).toEqual({
+      enableBuiltInAgents: true,
     });
   });
 });
