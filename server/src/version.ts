@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
-import { dirname } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 type PackageJson = {
   version?: string;
@@ -8,6 +9,8 @@ type PackageJson = {
 
 type GitDescribeCommand = () => string;
 type DebugLog = (fields: Record<string, unknown>, message: string) => void;
+type PathExists = (path: string) => boolean;
+type Realpath = (path: string) => string;
 
 const requirePackage = createRequire(import.meta.url);
 const packageRoot = dirname(requirePackage.resolve("../package.json"));
@@ -35,8 +38,64 @@ function defaultGitDescribeCommand(): string {
   );
 }
 
-function isPackagedInstall(path: string): boolean {
-  return path.split(/[\\/]+/).includes("node_modules");
+function hasPathSegment(path: string, segment: string): boolean {
+  return path.split(/[\\/]+/).includes(segment);
+}
+
+function safeRealpath(path: string, realpath: Realpath): string {
+  try {
+    return realpath(path);
+  } catch {
+    return path;
+  }
+}
+
+function hasGitMetadataBeforeNodeModulesBoundary(
+  path: string,
+  pathExists: PathExists,
+): boolean {
+  let current = path;
+
+  while (true) {
+    if (pathExists(join(current, ".git"))) return true;
+
+    const parent = dirname(current);
+    if (parent === current || basename(current) === "node_modules") return false;
+
+    current = parent;
+  }
+}
+
+function isPackagedInstall(
+  path: string,
+  {
+    pathExists = existsSync,
+    realpath = realpathSync,
+  }: { pathExists?: PathExists; realpath?: Realpath } = {},
+): boolean {
+  const realPackageRoot = safeRealpath(path, realpath);
+  const candidateRoots = Array.from(new Set([path, realPackageRoot]));
+  const hasNodeModulesSegment = candidateRoots.some((candidate) =>
+    hasPathSegment(candidate, "node_modules"),
+  );
+
+  if (!hasNodeModulesSegment) return false;
+
+  return !candidateRoots.some((candidate) =>
+    hasGitMetadataBeforeNodeModulesBoundary(candidate, pathExists),
+  );
+}
+
+function normalizeErrorField(value: unknown): unknown {
+  if (Buffer.isBuffer(value)) return value.toString("utf8");
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8");
+  return value;
+}
+
+function compactRecord(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined),
+  );
 }
 
 function summarizeError(err: unknown): Record<string, unknown> {
@@ -47,15 +106,24 @@ function summarizeError(err: unknown): Record<string, unknown> {
       status?: unknown;
       signal?: unknown;
       code?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+      stack?: unknown;
+      cause?: unknown;
     };
 
-    return {
+    return compactRecord({
       name: errorLike.name,
       message: errorLike.message,
       status: errorLike.status,
       signal: errorLike.signal,
       code: errorLike.code,
-    };
+      stdout: normalizeErrorField(errorLike.stdout),
+      stderr: normalizeErrorField(errorLike.stderr),
+      stack: errorLike.stack,
+      cause:
+        errorLike.cause === undefined ? undefined : summarizeError(errorLike.cause),
+    });
   }
 
   return { message: String(err) };
@@ -83,6 +151,8 @@ export function resolveServerVersion(
     packageVersion?: string;
     debugLog?: DebugLog;
     packageRoot?: string;
+    pathExists?: PathExists;
+    realpath?: Realpath;
   } = {},
 ): string {
   const packageVersion = opts.packageVersion ?? pkg.version ?? "0.0.0";
@@ -90,7 +160,12 @@ export function resolveServerVersion(
   const debugLog = opts.debugLog ?? defaultDebugLog;
   const resolvedPackageRoot = opts.packageRoot ?? packageRoot;
 
-  if (!opts.gitDescribeCommand && isPackagedInstall(resolvedPackageRoot)) {
+  if (
+    isPackagedInstall(resolvedPackageRoot, {
+      pathExists: opts.pathExists,
+      realpath: opts.realpath,
+    })
+  ) {
     debugLog(
       { reason: "packaged_install" },
       "falling back to package version for server version",

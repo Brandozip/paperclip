@@ -42,7 +42,13 @@ describe("resolveServerVersion", () => {
 
   it("falls back to package version without throwing when git is unavailable", () => {
     const debugLog = vi.fn();
-    const err = new Error("fatal: not a git repository");
+    const cause = new Error("spawn git ENOENT");
+    const err = Object.assign(new Error("fatal: not a git repository"), {
+      code: 128,
+      stderr: Buffer.from("fatal: not a git repository\n"),
+      stdout: "",
+      cause,
+    });
 
     expect(
       resolveServerVersion({
@@ -55,7 +61,14 @@ describe("resolveServerVersion", () => {
     ).toBe("2026.706.0");
     expect(debugLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        err: expect.objectContaining({ message: "fatal: not a git repository" }),
+        err: expect.objectContaining({
+          cause: expect.objectContaining({ message: "spawn git ENOENT" }),
+          code: 128,
+          message: "fatal: not a git repository",
+          stderr: "fatal: not a git repository\n",
+          stdout: "",
+          stack: expect.any(String),
+        }),
         reason: "git_describe_unavailable",
       }),
       "falling back to package version for server version",
@@ -77,6 +90,25 @@ describe("resolveServerVersion", () => {
       { reason: "packaged_install" },
       "falling back to package version for server version",
     );
+  });
+
+  it("uses git metadata for source checkouts whose path contains node_modules", () => {
+    const debugLog = vi.fn();
+    const gitDescribeCommand = vi.fn(() => "v2026.626.0-58-g518fc71ce\n");
+
+    expect(
+      resolveServerVersion({
+        packageVersion: "2026.707.0-canary.12",
+        debugLog,
+        gitDescribeCommand,
+        packageRoot: "/tmp/node_modules/source/paperclip/server",
+        pathExists: (path) => path === "/tmp/node_modules/source/paperclip/.git",
+        realpath: (path) => path,
+      }),
+    ).toBe("2026.626.0+58.git.518fc71ce");
+
+    expect(gitDescribeCommand).toHaveBeenCalledOnce();
+    expect(debugLog).not.toHaveBeenCalled();
   });
 
   it("keeps fallback diagnostics quiet by default", () => {
