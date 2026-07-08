@@ -98,6 +98,13 @@ function buildApp() {
     res.write("chunk-one:");
     res.end("chunk-two");
   });
+  app.get("/api/json-download", (_req, res) => {
+    const chunk = JSON.stringify(issueListFixture(500));
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=\"issues.json\"");
+    res.write(chunk.slice(0, chunk.length / 2));
+    res.end(chunk.slice(chunk.length / 2));
+  });
   return app;
 }
 
@@ -146,14 +153,14 @@ describe("API compression middleware", () => {
     expect(JSON.parse(inflateSync(res.body).toString("utf8"))).toEqual({ already: "encoded" });
   });
 
-  it("preserves ETag validators on compressed JSON responses", async () => {
+  it("weakens strong ETag validators on compressed JSON responses", async () => {
     const res = await requestRaw(buildApp(), "/api/etag", {
       "accept-encoding": "gzip",
     });
 
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-encoding"]).toBe("gzip");
-    expect(res.headers.etag).toBe("\"fixture-etag\"");
+    expect(res.headers.etag).toBe("W/\"fixture-etag\"");
     expect(JSON.parse(gunzipSync(res.body).toString("utf8"))).toHaveLength(500);
   });
 
@@ -165,5 +172,16 @@ describe("API compression middleware", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-encoding"]).toBeUndefined();
     expect(res.body.toString("utf8")).toBe("chunk-one:chunk-two");
+  });
+
+  it("passes streamed JSON attachment downloads through without compression", async () => {
+    const res = await requestRaw(buildApp(), "/api/json-download", {
+      "accept-encoding": "gzip, deflate",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-disposition"]).toBe("attachment; filename=\"issues.json\"");
+    expect(res.headers["content-encoding"]).toBeUndefined();
+    expect(JSON.parse(res.body.toString("utf8"))).toHaveLength(500);
   });
 });

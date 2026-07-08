@@ -55,6 +55,14 @@ function shouldSkipForCacheControl(value: unknown): boolean {
   return /\bno-transform\b/i.test(String(value ?? ""));
 }
 
+function shouldSkipForStreamedResponse(res: Parameters<RequestHandler>[1]): boolean {
+  return (
+    res.hasHeader("Content-Disposition") ||
+    res.hasHeader("Accept-Ranges") ||
+    res.hasHeader("Content-Range")
+  );
+}
+
 function statusAllowsBody(statusCode: number): boolean {
   return statusCode !== 204 && statusCode !== 304 && statusCode >= 200;
 }
@@ -66,9 +74,23 @@ function shouldPassthroughWrite(res: Parameters<RequestHandler>[1]): boolean {
     alreadyEncoded ||
     !statusAllowsBody(res.statusCode) ||
     shouldSkipForCacheControl(res.getHeader("Cache-Control")) ||
+    shouldSkipForStreamedResponse(res) ||
     contentType === undefined ||
     !isJsonContentType(contentType)
   );
+}
+
+function weakenStrongEtag(res: Parameters<RequestHandler>[1]): void {
+  const etag = res.getHeader("ETag");
+  if (etag === undefined) return;
+
+  const weaken = (value: string) => /^W\//i.test(value) ? value : `W/${value}`;
+  if (Array.isArray(etag)) {
+    res.setHeader("ETag", etag.map((value) => weaken(String(value))));
+    return;
+  }
+
+  res.setHeader("ETag", weaken(String(etag)));
 }
 
 function normalizeEndArgs(args: unknown[]): {
@@ -156,7 +178,8 @@ export function apiCompression(options: ApiCompressionOptions = {}): RequestHand
         statusAllowsBody(res.statusCode) &&
         body.length >= thresholdBytes &&
         isJsonContentType(res.getHeader("Content-Type")) &&
-        !shouldSkipForCacheControl(res.getHeader("Cache-Control"));
+        !shouldSkipForCacheControl(res.getHeader("Cache-Control")) &&
+        !shouldSkipForStreamedResponse(res);
 
       if (!shouldCompress) {
         const result = originalEnd(body, callback);
@@ -168,6 +191,7 @@ export function apiCompression(options: ApiCompressionOptions = {}): RequestHand
       res.vary("Accept-Encoding");
       res.setHeader("Content-Encoding", selectedEncoding);
       res.setHeader("Content-Length", String(compressed.length));
+      weakenStrongEtag(res);
       res.removeHeader("Content-MD5");
       const result = originalEnd(compressed, callback);
       for (const writeCallback of writeCallbacks) writeCallback();
