@@ -1264,6 +1264,10 @@ function buildForkSkillDraft(skill: CompanySkillDetail): SkillCreateDraft {
   };
 }
 
+export function skillForkStudioRoute(skillId: string) {
+  return `/skills/studio/new?forkFrom=${encodeURIComponent(skillId)}`;
+}
+
 function NewSkillWizard({
   initialDraft,
   onCreate,
@@ -3743,7 +3747,8 @@ export function CompanySkills() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const parsedRoute = useMemo(() => parseSkillRoute(routePath), [routePath]);
-  const routeSkillToken = parsedRoute.skillToken;
+  const isStudioNew = routePath === "studio/new";
+  const routeSkillToken = isStudioNew ? null : parsedRoute.skillToken;
   const selectedPath = parsedRoute.filePath;
   const viewParam = searchParams.get("view");
   const activeView: "installed" | "catalog" = viewParam === "catalog" ? "catalog" : "installed";
@@ -3762,9 +3767,10 @@ export function CompanySkills() {
       ? "files"
       : "overview";
   const discoveryCategory = searchParams.get("category");
+  const studioForkFromId = isStudioNew ? searchParams.get("forkFrom")?.trim() || null : null;
   // Discovery grid owns `/skills` whenever no specific skill or catalog entry is
   // selected; selecting either drops into the existing master/detail surfaces.
-  const isDiscovery = !routeSkillToken && !selectedCatalogRef;
+  const isDiscovery = !isStudioNew && !routeSkillToken && !selectedCatalogRef;
 
   function setDiscoveryTab(tab: DiscoveryTab) {
     setSearchParams((current) => {
@@ -3820,11 +3826,16 @@ export function CompanySkills() {
   }
 
   useEffect(() => {
+    if (!isStudioNew) return;
+    setCreateError(null);
+  }, [isStudioNew, studioForkFromId]);
+
+  useEffect(() => {
     setBreadcrumbs([
       { label: "Skills", href: "/skills" },
-      ...(routeSkillToken ? [{ label: "Detail" }] : []),
+      ...(isStudioNew ? [{ label: studioForkFromId ? "Fork skill" : "New skill" }] : routeSkillToken ? [{ label: "Detail" }] : []),
     ]);
-  }, [routeSkillToken, setBreadcrumbs]);
+  }, [isStudioNew, routeSkillToken, setBreadcrumbs, studioForkFromId]);
 
   // The old split catalog view no longer exists — catalog/bundled skills now open
   // as a regular full page keyed by `?catalog=<ref>`. Strip the legacy `view`
@@ -3874,6 +3885,20 @@ export function CompanySkills() {
     queryFn: () => companySkillsApi.versions(selectedCompanyId!, selectedSkillId!),
     enabled: Boolean(selectedCompanyId && selectedSkillId),
   });
+
+  const studioForkDetailQuery = useQuery({
+    queryKey: queryKeys.companySkills.detail(selectedCompanyId ?? "", studioForkFromId ?? ""),
+    queryFn: () => companySkillsApi.detail(selectedCompanyId!, studioForkFromId!),
+    enabled: Boolean(selectedCompanyId && isStudioNew && studioForkFromId),
+  });
+
+  const studioDraft = useMemo(() => {
+    if (!isStudioNew) return buildBlankSkillDraft();
+    if (studioForkFromId) {
+      return studioForkDetailQuery.data ? buildForkSkillDraft(studioForkDetailQuery.data) : buildBlankSkillDraft();
+    }
+    return buildBlankSkillDraft();
+  }, [isStudioNew, studioForkDetailQuery.data, studioForkFromId]);
 
   const updateStatusQuery = useQuery({
     queryKey: queryKeys.companySkills.updateStatus(selectedCompanyId ?? "", selectedSkillId ?? ""),
@@ -4462,6 +4487,11 @@ export function CompanySkills() {
   const catalogSourceForDetail = activeDetail
     ? (catalogListQuery.data ?? []).find((entry) => entry.key === activeDetail.key)?.source ?? null
     : null;
+  const studioBackHref = studioForkDetailQuery.data ? routeForSkill(studioForkDetailQuery.data) : "/skills";
+  const studioTitle = studioForkFromId ? "Fork skill" : "Create a new skill";
+  const studioDescription = studioForkFromId
+    ? "Review the fork metadata and create an editable company copy."
+    : "Create an editable company skill in the Paperclip workspace.";
 
   return (
     <>
@@ -4645,7 +4675,38 @@ export function CompanySkills() {
         </DialogContent>
       </Dialog>
 
-      {isDiscovery ? (
+      {isStudioNew ? (
+        <div className="min-h-(--sz-calc-30)">
+          <div className="border-b border-border px-4 py-5">
+            <Link
+              to={studioBackHref}
+              className="mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground no-underline transition-colors hover:text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Back
+            </Link>
+            <h1 className="text-2xl font-semibold">{studioTitle}</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{studioDescription}</p>
+          </div>
+          <div className="px-4 py-4">
+            <div className="max-w-3xl">
+              {studioForkFromId && studioForkDetailQuery.isLoading ? (
+                <PageSkeleton variant="detail" />
+              ) : studioForkFromId && !studioForkDetailQuery.data ? (
+                <EmptyState icon={Boxes} message="Fork source skill not found." />
+              ) : (
+                <NewSkillWizard
+                  initialDraft={studioDraft}
+                  onCreate={(payload) => createSkill.mutate(payload)}
+                  isPending={createSkill.isPending}
+                  error={createError}
+                  onCancel={() => navigate(studioBackHref)}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : isDiscovery ? (
         <DiscoveryGrid
           tab={discoveryTab}
           tabCounts={discoveryTabCounts}
@@ -4717,7 +4778,7 @@ export function CompanySkills() {
           installUpdatePending={installUpdate.isPending}
           onToggleStar={() => toggleStar.mutate()}
           starPending={toggleStar.isPending}
-          onFork={() => activeDetail && openCreateWizard(buildForkSkillDraft(activeDetail))}
+          onFork={() => activeDetail && navigate(skillForkStudioRoute(activeDetail.id))}
           onUpdateSettings={(updates) => activeDetail && updateSkillSettings.mutate({ skillId: activeDetail.id, updates })}
           updateSettingsPending={updateSkillSettings.isPending}
           onDelete={openDeleteDialog}

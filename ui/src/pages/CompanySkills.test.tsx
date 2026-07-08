@@ -5,7 +5,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import type { CompanySkillDetail, CompanySkillVersion } from "@paperclipai/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SkillDetailPage, getSkillVersionDiffSelection } from "./CompanySkills";
+import { SkillDetailPage, getSkillVersionDiffSelection, skillForkStudioRoute } from "./CompanySkills";
 
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (
@@ -264,6 +264,12 @@ describe("getSkillVersionDiffSelection", () => {
       leftVersionId: null,
       rightVersionId: v1.id,
     });
+  });
+});
+
+describe("skillForkStudioRoute", () => {
+  it("builds a direct fork draft URL for a specific skill", () => {
+    expect(skillForkStudioRoute("skill 1")).toBe("/skills/studio/new?forkFrom=skill%201");
   });
 });
 
