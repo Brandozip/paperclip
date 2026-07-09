@@ -5807,6 +5807,7 @@ export function companySkillService(db: Db) {
         eq(companySkillTestRuns.skillId, skillId),
         eq(companySkillTestRuns.id, runId),
         isNull(companySkillTestRuns.deletedAt),
+        isNull(companySkillTestRuns.supersededAt),
       ))
       .then((rows) => rows[0] ?? null);
     if (!existing) return null;

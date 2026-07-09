@@ -430,6 +430,13 @@ describeEmbeddedPostgres("companySkillService skill test runs", () => {
       issueId: first.issueId,
       outcome: "succeeded",
     })).toBeNull();
+    const cancelledIssueIds: string[] = [];
+    expect(await svc.cancelTestRun(companyId, skillId, first.id, {
+      cancelHarnessIssue: async (issueId) => {
+        cancelledIssueIds.push(issueId);
+      },
+    })).toBeNull();
+    expect(cancelledIssueIds).toEqual([]);
 
     const firstRow = await db
       .select({
