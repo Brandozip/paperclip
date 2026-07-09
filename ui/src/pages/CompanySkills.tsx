@@ -74,9 +74,9 @@ import {
 } from "../lib/company-skill-routes";
 import {
   normalizeSkillDraftSlug,
-  skillAccentColor,
   splitCategoryDraft,
 } from "../lib/skill-create";
+import { SkillCardIcon } from "../components/SkillCardIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -550,29 +550,7 @@ export type DiscoveryCard = {
   sourceLabel?: string | null;
 };
 
-export function SkillCardIcon({ card, size = 36 }: { card: DiscoveryCard; size?: number }) {
-  if (card.iconUrl) {
-    return (
-      <img
-        src={card.iconUrl}
-        alt=""
-        className="shrink-0 rounded-md object-cover"
-        style={{ width: size, height: size }}
-      />
-    );
-  }
-  const accent = skillAccentColor(card.key, card.color);
-  const letter = (card.slug || card.name || "?").trim().charAt(0).toUpperCase();
-  return (
-    <span
-      aria-hidden="true"
-      className="flex shrink-0 items-center justify-center rounded-md font-semibold text-white"
-      style={{ width: size, height: size, backgroundColor: accent, fontSize: Math.round(size * 0.42) }}
-    >
-      {letter}
-    </span>
-  );
-}
+export { SkillCardIcon } from "../components/SkillCardIcon";
 
 function discoveryVersionLabel(skill: {
   packageVersion: string | null;
@@ -2623,24 +2601,10 @@ export function SkillDetailPage({
               <SkillCardIcon
                 card={{
                   key: detail.key,
-                  skillId: detail.id,
-                  catalogRef: null,
                   name: detail.name,
                   slug: detail.slug,
-                  author: detail.authorName ?? source.label,
-                  version: null,
-                  tagline: detail.tagline,
-                  description: detail.description,
-                  categories: detail.categories,
                   iconUrl: detail.iconUrl,
                   color: detail.color,
-                  starCount: detail.starCount,
-                  agentCount: detail.attachedAgentCount,
-                  forkCount: detail.forkCount,
-                  installed: true,
-                  required: false,
-                  forkedFrom: Boolean(detail.forkedFromSkillId),
-                  updatedAt: new Date(detail.updatedAt).getTime() || 0,
                 }}
                 size={44}
               />
