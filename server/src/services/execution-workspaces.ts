@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { executionWorkspaces, issueComments, issues, projects, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
+import { executionWorkspaces, heartbeatRuns, issueComments, issues, projects, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
 import type {
   ExecutionWorkspace,
   ExecutionWorkspaceSummary,
@@ -70,6 +70,18 @@ export type ExecutionWorkspaceBranchReconcileResult = {
   recoveryAction: IssueRecoveryAction | null;
   auditCommentId: string | null;
 };
+
+export type ExecutionWorkspaceGitWorktreeContention = {
+  claimedByWorkspaceId: string;
+  claimedByIssueId: string | null;
+  claimedByIssueIdentifier: string | null;
+  activeRun: {
+    id: string;
+    status: "queued" | "running";
+    issueId: string | null;
+    issueIdentifier: string | null;
+  } | null;
+} | null;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1046,6 +1058,124 @@ export function executionWorkspaceService(db: Db) {
         .where(and(...conditions))
         .orderBy(desc(executionWorkspaces.lastUsedAt), desc(executionWorkspaces.createdAt));
       return rows.map((row) => toExecutionWorkspaceSummary(row));
+    },
+
+    findGitWorktreeContention: async (input: {
+      companyId: string;
+      worktreePath: string;
+      liveBranchName: string | null;
+      excludingExecutionWorkspaceId?: string | null;
+    }): Promise<ExecutionWorkspaceGitWorktreeContention> => {
+      const resolvedWorktreePath = path.resolve(input.worktreePath);
+      const pathOrBranchConditions = [
+        eq(executionWorkspaces.providerRef, input.worktreePath),
+        eq(executionWorkspaces.cwd, input.worktreePath),
+      ];
+      if (input.liveBranchName) {
+        pathOrBranchConditions.push(eq(executionWorkspaces.branchName, input.liveBranchName));
+      }
+
+      const candidates = await db
+        .select({
+          id: executionWorkspaces.id,
+          cwd: executionWorkspaces.cwd,
+          providerRef: executionWorkspaces.providerRef,
+          branchName: executionWorkspaces.branchName,
+          sourceIssueId: executionWorkspaces.sourceIssueId,
+          sourceIssueIdentifier: issues.identifier,
+        })
+        .from(executionWorkspaces)
+        .leftJoin(
+          issues,
+          and(
+            eq(issues.companyId, executionWorkspaces.companyId),
+            eq(issues.id, executionWorkspaces.sourceIssueId),
+          ),
+        )
+        .where(and(
+          eq(executionWorkspaces.companyId, input.companyId),
+          isNull(executionWorkspaces.closedAt),
+          ne(executionWorkspaces.status, "archived"),
+          input.excludingExecutionWorkspaceId
+            ? ne(executionWorkspaces.id, input.excludingExecutionWorkspaceId)
+            : sql`true`,
+          or(...pathOrBranchConditions),
+        ))
+        .orderBy(desc(executionWorkspaces.lastUsedAt), desc(executionWorkspaces.updatedAt))
+        .limit(20);
+
+      for (const candidate of candidates) {
+        const candidatePath = readNullableString(candidate.providerRef) ?? readNullableString(candidate.cwd);
+        const matchesPath = candidatePath ? path.resolve(candidatePath) === resolvedWorktreePath : false;
+        const matchesBranch = Boolean(input.liveBranchName && candidate.branchName === input.liveBranchName);
+        if (!matchesPath && !matchesBranch) continue;
+
+        const linkedIssueConditions = [eq(issues.executionWorkspaceId, candidate.id)];
+        if (candidate.sourceIssueId) linkedIssueConditions.push(eq(issues.id, candidate.sourceIssueId));
+        const linkedIssueRows = await db
+          .select({
+            id: issues.id,
+            identifier: issues.identifier,
+            checkoutRunId: issues.checkoutRunId,
+            executionRunId: issues.executionRunId,
+          })
+          .from(issues)
+          .where(and(
+            eq(issues.companyId, input.companyId),
+            isNull(issues.hiddenAt),
+            linkedIssueConditions.length === 1 ? linkedIssueConditions[0]! : or(...linkedIssueConditions),
+          ))
+          .orderBy(desc(issues.updatedAt))
+          .limit(20);
+
+        const runToIssue = new Map<string, { id: string; identifier: string | null }>();
+        for (const issue of linkedIssueRows) {
+          if (issue.executionRunId) runToIssue.set(issue.executionRunId, { id: issue.id, identifier: issue.identifier ?? null });
+          if (issue.checkoutRunId) runToIssue.set(issue.checkoutRunId, { id: issue.id, identifier: issue.identifier ?? null });
+        }
+
+        let activeRun: NonNullable<ExecutionWorkspaceGitWorktreeContention>["activeRun"] = null;
+        const runIds = [...runToIssue.keys()];
+        if (runIds.length > 0) {
+          const [row] = await db
+            .select({
+              id: heartbeatRuns.id,
+              status: heartbeatRuns.status,
+            })
+            .from(heartbeatRuns)
+            .where(and(
+              eq(heartbeatRuns.companyId, input.companyId),
+              inArray(heartbeatRuns.id, runIds),
+              inArray(heartbeatRuns.status, ["queued", "running"]),
+            ))
+            .orderBy(desc(heartbeatRuns.startedAt), desc(heartbeatRuns.createdAt))
+            .limit(1);
+          if (row && (row.status === "queued" || row.status === "running")) {
+            const issue = runToIssue.get(row.id) ?? null;
+            activeRun = {
+              id: row.id,
+              status: row.status,
+              issueId: issue?.id ?? null,
+              issueIdentifier: issue?.identifier ?? null,
+            };
+          }
+        }
+
+        const claimedIssue =
+          linkedIssueRows.find((issue) => issue.id === candidate.sourceIssueId)
+          ?? linkedIssueRows[0]
+          ?? null;
+
+        return {
+          claimedByWorkspaceId: candidate.id,
+          claimedByIssueId: claimedIssue?.id ?? candidate.sourceIssueId ?? null,
+          claimedByIssueIdentifier:
+            claimedIssue?.identifier ?? candidate.sourceIssueIdentifier ?? null,
+          activeRun,
+        };
+      }
+
+      return null;
     },
 
     getById: async (id: string) => {

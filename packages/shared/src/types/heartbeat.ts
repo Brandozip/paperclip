@@ -22,6 +22,18 @@ export interface GitWorktreeBranchIncoherenceEvidence {
   actualBranch: string | null;
   cleanliness: "clean" | "dirty" | "unknown";
   statusEntryCount: number | null;
+  dirtyPathSample: string[];
+  contention: {
+    claimedByWorkspaceId: string;
+    claimedByIssueId: string | null;
+    claimedByIssueIdentifier: string | null;
+    activeRun: {
+      id: string;
+      status: "queued" | "running";
+      issueId: string | null;
+      issueIdentifier: string | null;
+    } | null;
+  } | null;
   provenance: {
     expectedBranchRef: string;
     actualBranchRef: string | null;
