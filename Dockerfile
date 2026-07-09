@@ -44,7 +44,7 @@ COPY packages/plugins/plugin-fireworks-ai/package.json packages/plugins/plugin-f
 COPY patches/ patches/
 COPY scripts/link-plugin-dev-sdk.mjs scripts/
 
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 FROM base AS build
 WORKDIR /app
