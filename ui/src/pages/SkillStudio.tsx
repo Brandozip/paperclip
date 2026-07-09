@@ -66,6 +66,7 @@ import {
   type SkillCreateDraft,
 } from "@/lib/skill-create";
 import { getRecentStudioSkillIds, trackRecentStudioSkill } from "@/lib/recent-skills";
+import { AgentsUsingSkillBadge } from "@/components/skill-studio/AgentsUsingSkillDialog";
 import { cn, formatCents, relativeTime } from "@/lib/utils";
 import { SkillCardIcon, type DiscoveryCard } from "./CompanySkills";
 import {
@@ -1009,6 +1010,7 @@ function StudioShell({
     <TooltipProvider delayDuration={200}>
       <div className="flex h-full min-h-0 flex-col">
         <StudioHeader
+          companyId={companyId}
           skill={skill}
           skillDirty={skillDirty}
           skills={skills}
@@ -1070,6 +1072,7 @@ function StudioShell({
 // ---------------------------------------------------------------------------
 
 function StudioHeader({
+  companyId,
   skill,
   skillDirty,
   skills,
@@ -1077,6 +1080,7 @@ function StudioHeader({
   onSelectSkill,
   onOpenVersions,
 }: {
+  companyId: string;
   skill: CompanySkillDetail;
   skillDirty: boolean;
   skills: CompanySkillListItem[];
@@ -1114,6 +1118,7 @@ function StudioHeader({
       {!skill.editable ? (
         <Badge variant="secondary">Read-only</Badge>
       ) : null}
+      <AgentsUsingSkillBadge companyId={companyId} skill={skill} />
       <div className="ml-auto flex items-center gap-1">
         <Button variant="ghost" size="sm" onClick={onOpenVersions}>
           <History className="mr-1.5 h-3.5 w-3.5" />
