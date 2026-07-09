@@ -552,11 +552,13 @@ export function environmentService(db: Db) {
 
       const isManagedLocal = environment.driver === "local";
       const isInstanceDefault = countFromRows(instanceDefaultRows) > 0;
+      const activeLeaseCount = countFromRows(activeLeaseRows);
+      const activeCustomImageSetupSessionCount = countFromRows(activeSetupRows);
+      const hasActiveRuntimeUse = activeLeaseCount > 0 || activeCustomImageSetupSessionCount > 0;
       const deleteBlockedReasons: EnvironmentDeleteBlockedReason[] = [];
       if (isManagedLocal) deleteBlockedReasons.push("managed_local");
       if (isInstanceDefault) deleteBlockedReasons.push("instance_default");
-      const activeLeaseCount = countFromRows(activeLeaseRows);
-      const activeCustomImageSetupSessionCount = countFromRows(activeSetupRows);
+      if (hasActiveRuntimeUse) deleteBlockedReasons.push("active_runtime_use");
 
       return {
         environmentId: id,
@@ -574,9 +576,19 @@ export function environmentService(db: Db) {
         activeRuntimeUse: {
           activeLeaseCount,
           activeCustomImageSetupSessionCount,
-          hasActiveRuntimeUse: activeLeaseCount > 0 || activeCustomImageSetupSessionCount > 0,
+          hasActiveRuntimeUse,
         },
       };
+    },
+
+    releaseActiveLeasesForEnvironment: async (id: string): Promise<number> => {
+      const now = new Date();
+      const rows = await db
+        .update(environmentLeases)
+        .set({ status: "released", releasedAt: now, lastUsedAt: now, updatedAt: now })
+        .where(and(eq(environmentLeases.environmentId, id), eq(environmentLeases.status, "active")))
+        .returning();
+      return rows.length;
     },
 
     listLeases: async (
