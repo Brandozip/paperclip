@@ -5741,7 +5741,12 @@ export function companySkillService(db: Db) {
     const row = await db
       .select()
       .from(companySkillTestRuns)
-      .where(and(eq(companySkillTestRuns.companyId, input.companyId), eq(companySkillTestRuns.issueId, input.issueId)))
+      .where(and(
+        eq(companySkillTestRuns.companyId, input.companyId),
+        eq(companySkillTestRuns.issueId, input.issueId),
+        isNull(companySkillTestRuns.deletedAt),
+        isNull(companySkillTestRuns.supersededAt),
+      ))
       .then((rows) => rows[0] ?? null);
     if (!row || ["succeeded", "failed", "cancelled"].includes(row.status)) return row
       ? (await hydrateTestRuns(input.companyId, [row]))[0] ?? null
@@ -5780,6 +5785,8 @@ export function companySkillService(db: Db) {
         eq(companySkillTestRuns.companyId, companyId),
         eq(companySkillTestRuns.issueId, issueId),
         eq(companySkillTestRuns.status, "queued"),
+        isNull(companySkillTestRuns.deletedAt),
+        isNull(companySkillTestRuns.supersededAt),
       ))
       .returning()
       .then((rows) => rows[0] ?? null);
@@ -5838,21 +5845,23 @@ export function companySkillService(db: Db) {
       throw unprocessable("Cancel the run before deleting it.");
     }
     const now = new Date();
-    await db.transaction(async (tx) => {
-      await tx
+    const updated = await db.transaction(async (tx) => {
+      return await tx
         .update(companySkillTestRuns)
         .set({ deletedAt: now, harnessIssueDeletedAt: existing.harnessIssueDeletedAt ?? now, updatedAt: now })
         .where(and(
           eq(companySkillTestRuns.companyId, companyId),
           eq(companySkillTestRuns.id, runId),
-        ));
+        ))
+        .returning()
+        .then((rows) => rows[0] ?? null);
     });
     // Hide the (already-terminal) harness task so the deleted run leaves nothing
     // dangling on the board; best-effort, run row is the source of truth.
     if (!existing.harnessIssueDeletedAt) {
       await deps.hideHarnessIssue(existing.issueId).catch(() => {});
     }
-    return (await hydrateTestRuns(companyId, [{ ...existing, deletedAt: now }]))[0] ?? null;
+    return updated ? (await hydrateTestRuns(companyId, [updated]))[0] ?? null : null;
   }
 
   async function pruneExpiredTestHarnessIssues(companyId: string, now = new Date()): Promise<{ pruned: number }> {

@@ -357,6 +357,8 @@ describeEmbeddedPostgres("companySkillService skill test runs", () => {
       },
     });
     expect(deleted?.id).toBe(run.id);
+    expect(deleted?.harnessIssueDeletedAt).toBeInstanceOf(Date);
+    expect(deleted?.taskExpired).toBe(true);
     expect(hidden).toEqual([run.issueId]);
 
     // Gone from listings and detail.
@@ -399,6 +401,51 @@ describeEmbeddedPostgres("companySkillService skill test runs", () => {
         runDeps(companyId),
       ),
     ).rejects.toThrow(/skill version not found/i);
+  });
+
+  it("ignores superseded test harness issue transitions", async () => {
+    const { companyId, skillId, agentId } = await seedSkillAndAgent();
+    const first = await svc.createTestRun(
+      companyId,
+      skillId,
+      { content: "first run", agentId },
+      { type: "user", userId: "local-board" },
+      runDeps(companyId),
+    );
+    const replacement = await svc.createTestRun(
+      companyId,
+      skillId,
+      { content: "replacement run", agentId },
+      { type: "user", userId: "local-board" },
+      runDeps(companyId),
+    );
+
+    const listed = await svc.listTestRuns(companyId, skillId);
+    expect(listed.map((run) => run.id)).toEqual([replacement.id, first.id]);
+    expect(listed.find((run) => run.id === first.id)?.supersededAt).toBeInstanceOf(Date);
+    expect(await svc.getTestRunDetail(companyId, skillId, first.id)).not.toBeNull();
+    expect(await svc.markTestRunRunning(companyId, first.issueId)).toBeNull();
+    expect(await svc.completeTestRunForIssue({
+      companyId,
+      issueId: first.issueId,
+      outcome: "succeeded",
+    })).toBeNull();
+
+    const firstRow = await db
+      .select({
+        status: companySkillTestRuns.status,
+        supersededAt: companySkillTestRuns.supersededAt,
+        outputSnapshot: companySkillTestRuns.outputSnapshot,
+      })
+      .from(companySkillTestRuns)
+      .where(eq(companySkillTestRuns.id, first.id))
+      .then((rows) => rows[0] ?? null);
+    expect(firstRow?.status).toBe("queued");
+    expect(firstRow?.supersededAt).toBeInstanceOf(Date);
+    expect(firstRow?.outputSnapshot).toBe("");
+
+    const runningReplacement = await svc.markTestRunRunning(companyId, replacement.issueId);
+    expect(runningReplacement?.status).toBe("running");
   });
 
   it("snapshots output and keeps run history after harness issue retention", async () => {
