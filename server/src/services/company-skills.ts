@@ -5506,6 +5506,18 @@ export function companySkillService(db: Db) {
         .update(companySkillTestRuns)
         .set({
           supersededAt: now,
+          status: sql`
+            case when ${companySkillTestRuns.status} in ('queued', 'running')
+              then 'cancelled'
+              else ${companySkillTestRuns.status}
+            end
+          `,
+          error: sql`
+            case when ${companySkillTestRuns.status} in ('queued', 'running')
+              then coalesce(${companySkillTestRuns.error}, 'Superseded by newer run')
+              else ${companySkillTestRuns.error}
+            end
+          `,
           harnessIssueExpiresAt: previousExpiresAt,
           updatedAt: now,
         })

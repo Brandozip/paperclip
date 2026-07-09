@@ -441,15 +441,27 @@ describeEmbeddedPostgres("companySkillService skill test runs", () => {
     const firstRow = await db
       .select({
         status: companySkillTestRuns.status,
+        error: companySkillTestRuns.error,
         supersededAt: companySkillTestRuns.supersededAt,
         outputSnapshot: companySkillTestRuns.outputSnapshot,
       })
       .from(companySkillTestRuns)
       .where(eq(companySkillTestRuns.id, first.id))
       .then((rows) => rows[0] ?? null);
-    expect(firstRow?.status).toBe("queued");
+    expect(firstRow?.status).toBe("cancelled");
+    expect(firstRow?.error).toBe("Superseded by newer run");
     expect(firstRow?.supersededAt).toBeInstanceOf(Date);
     expect(firstRow?.outputSnapshot).toBe("");
+
+    const hiddenIssueIds: string[] = [];
+    const deletedFirst = await svc.deleteTestRun(companyId, skillId, first.id, {
+      hideHarnessIssue: async (issueId) => {
+        hiddenIssueIds.push(issueId);
+      },
+    });
+    expect(deletedFirst?.id).toBe(first.id);
+    expect(hiddenIssueIds).toEqual([first.issueId]);
+    expect((await svc.listTestRuns(companyId, skillId)).map((run) => run.id)).toEqual([replacement.id]);
 
     const runningReplacement = await svc.markTestRunRunning(companyId, replacement.issueId);
     expect(runningReplacement?.status).toBe("running");
