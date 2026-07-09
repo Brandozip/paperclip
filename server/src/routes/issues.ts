@@ -2078,6 +2078,7 @@ function requestMatchesEtag(ifNoneMatchHeader: string | undefined, etag: string)
 
 const ISSUE_LIST_SERVER_CACHE_TTL_MS = 2_000;
 const ISSUE_LIST_SERVER_CACHE_STALE_MS = 5_000;
+export const ISSUE_LIST_SERVER_CACHE_MAX_ENTRIES = 256;
 const ISSUE_LIST_STORM_WINDOW_MS = 500;
 const ISSUE_LIST_STORM_THRESHOLD = 4;
 const ISSUE_LIST_MAX_ACTOR_CLIENT_INFLIGHT = 8;
@@ -2132,6 +2133,14 @@ type IssueListInflightEntry = {
 const issueListResponseCache = new Map<string, IssueListCacheEntry>();
 const issueListInflight = new Map<string, IssueListInflightEntry>();
 const issueListActorClientInflight = new Map<string, number>();
+
+export function __getIssueListResponseCacheSizeForTests() {
+  return issueListResponseCache.size;
+}
+
+export function __clearIssueListResponseCacheForTests() {
+  issueListResponseCache.clear();
+}
 
 function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("base64url").slice(0, 16);
@@ -2253,6 +2262,24 @@ function pruneIssueListResponseCache(now: number) {
   }
 }
 
+function touchIssueListResponseCacheEntry(key: string, entry: IssueListCacheEntry) {
+  issueListResponseCache.delete(key);
+  issueListResponseCache.set(key, entry);
+}
+
+function trimIssueListResponseCache() {
+  while (issueListResponseCache.size > ISSUE_LIST_SERVER_CACHE_MAX_ENTRIES) {
+    const oldestKey = issueListResponseCache.keys().next().value as string | undefined;
+    if (oldestKey === undefined) return;
+    issueListResponseCache.delete(oldestKey);
+  }
+}
+
+function setIssueListResponseCacheEntry(key: string, entry: IssueListCacheEntry) {
+  touchIssueListResponseCacheEntry(key, entry);
+  trimIssueListResponseCache();
+}
+
 function decrementIssueListActorClientInflight(actorClientKey: string) {
   const next = (issueListActorClientInflight.get(actorClientKey) ?? 1) - 1;
   if (next <= 0) issueListActorClientInflight.delete(actorClientKey);
@@ -2277,6 +2304,7 @@ async function coordinateIssueListGet(input: {
 
   const cached = input.allowTtlCache ? issueListResponseCache.get(input.requestKey.key) : undefined;
   if (cached && cached.expiresAt > now) {
+    touchIssueListResponseCacheEntry(input.requestKey.key, cached);
     return { response: cached.response, cacheStatus: "hit", identicalInFlightCount: 0 };
   }
 
@@ -2315,6 +2343,7 @@ async function coordinateIssueListGet(input: {
   const actorClientInflight = issueListActorClientInflight.get(actorClientKey) ?? 0;
   if (actorClientInflight >= ISSUE_LIST_MAX_ACTOR_CLIENT_INFLIGHT) {
     if (cached && cached.staleUntil > now) {
+      touchIssueListResponseCacheEntry(input.requestKey.key, cached);
       return { response: cached.response, cacheStatus: "stale", identicalInFlightCount: 0 };
     }
     return { response: null, cacheStatus: "retry", identicalInFlightCount: 0, retryAfterSeconds: 1 };
@@ -2339,7 +2368,7 @@ async function coordinateIssueListGet(input: {
   try {
     const response = await promise;
     if (input.allowTtlCache) {
-      issueListResponseCache.set(input.requestKey.key, {
+      setIssueListResponseCacheEntry(input.requestKey.key, {
         response,
         expiresAt: Date.now() + ISSUE_LIST_SERVER_CACHE_TTL_MS,
         staleUntil: Date.now() + ISSUE_LIST_SERVER_CACHE_STALE_MS,

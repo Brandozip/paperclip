@@ -8,7 +8,12 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
-import { issueRoutes } from "../routes/issues.js";
+import {
+  __clearIssueListResponseCacheForTests,
+  __getIssueListResponseCacheSizeForTests,
+  ISSUE_LIST_SERVER_CACHE_MAX_ENTRIES,
+  issueRoutes,
+} from "../routes/issues.js";
 import { ensureHumanRoleDefaultGrants } from "../services/principal-access-compatibility.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -30,6 +35,7 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
   }, 20_000);
 
   afterEach(async () => {
+    __clearIssueListResponseCacheForTests();
     await db.delete(issues);
     await db.delete(heartbeatRuns);
     await db.delete(agents);
@@ -348,6 +354,36 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
     expect(computeCount).toBe(1);
     expect(first.headers["x-paperclip-request-cache"]).toBe("miss");
     expect(second.headers["x-paperclip-request-cache"]).toBe("hit");
+  });
+
+  it("bounds compact issue-list server cache entries", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: uniqueIssuePrefix(),
+      requireBoardApprovalForNewAgents: false,
+    });
+    await seedCloudTenantMember(companyId);
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Bounded cache issue",
+      status: "todo",
+      priority: "medium",
+    });
+
+    const app = createApp(companyId);
+    for (let index = 0; index < ISSUE_LIST_SERVER_CACHE_MAX_ENTRIES + 5; index += 1) {
+      const res = await request(app)
+        .get(`/api/companies/${companyId}/issues`)
+        .query({ view: "compact", limit: "20", q: `cache-key-${index}` });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+
+    expect(__getIssueListResponseCacheSizeForTests()).toBe(ISSUE_LIST_SERVER_CACHE_MAX_ENTRIES);
   });
 
   it("logs request_storm_detected for identical in-flight compact issue-list fanout without query values", async () => {

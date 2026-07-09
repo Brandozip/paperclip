@@ -1,7 +1,11 @@
 import type { RequestHandler } from "express";
-import { deflateSync, gzipSync } from "node:zlib";
+import { promisify } from "node:util";
+import { deflate, gzip } from "node:zlib";
 
 export const API_COMPRESSION_THRESHOLD_BYTES = 1024;
+
+const gzipAsync = promisify(gzip);
+const deflateAsync = promisify(deflate);
 
 type SupportedEncoding = "gzip" | "deflate";
 
@@ -187,15 +191,23 @@ export function apiCompression(options: ApiCompressionOptions = {}): RequestHand
         return result;
       }
 
-      const compressed = selectedEncoding === "gzip" ? gzipSync(body) : deflateSync(body);
-      res.vary("Accept-Encoding");
-      res.setHeader("Content-Encoding", selectedEncoding);
-      res.setHeader("Content-Length", String(compressed.length));
-      weakenStrongEtag(res);
-      res.removeHeader("Content-MD5");
-      const result = originalEnd(compressed, callback);
-      for (const writeCallback of writeCallbacks) writeCallback();
-      return result;
+      void (async () => {
+        try {
+          const compressed = selectedEncoding === "gzip"
+            ? await gzipAsync(body)
+            : await deflateAsync(body);
+          res.vary("Accept-Encoding");
+          res.setHeader("Content-Encoding", selectedEncoding);
+          res.setHeader("Content-Length", String(compressed.length));
+          weakenStrongEtag(res);
+          res.removeHeader("Content-MD5");
+          originalEnd(compressed, callback);
+          for (const writeCallback of writeCallbacks) writeCallback();
+        } catch (error) {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        }
+      })();
+      return res;
     }) as typeof res.end;
 
     if (originalFlushHeaders) {
