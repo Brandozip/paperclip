@@ -12,6 +12,7 @@ import {
   agents,
   approvals,
   companies,
+  companyMemberships,
   companySkills,
   createDb,
   documentRevisions,
@@ -25,6 +26,7 @@ import {
   issues,
   issueThreadInteractions,
   issueWorkProducts,
+  principalPermissionGrants,
   projects,
 } from "@paperclipai/db";
 import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY, LOW_TRUST_REVIEW_PRESET } from "@paperclipai/shared";
@@ -546,6 +548,8 @@ describeEmbeddedPostgres("low-trust red-team HTTP route regression suite", () =>
     await deleteHeartbeatRunsAndWakeupsAfterActivityLogDrains(db);
     await db.delete(issues);
     await db.delete(agentRuntimeState);
+    await db.delete(principalPermissionGrants);
+    await db.delete(companyMemberships);
     await db.delete(agents);
     await db.delete(projects);
     await db.delete(companySkills);
@@ -675,6 +679,29 @@ describeEmbeddedPostgres("low-trust red-team HTTP route regression suite", () =>
 
   it("restricts low-trust self inspection without changing standard-agent visibility", async () => {
     const fixture = await seedLowTrustFixture(db);
+    await db.insert(companyMemberships).values({
+      companyId: fixture.company.id,
+      principalType: "agent",
+      principalId: fixture.agents.lowTrust.id,
+      status: "active",
+      membershipRole: "member",
+    });
+    await db.insert(principalPermissionGrants).values([
+      {
+        companyId: fixture.company.id,
+        principalType: "agent",
+        principalId: fixture.agents.lowTrust.id,
+        permissionKey: "agents:configure",
+        grantedByUserId: null,
+      },
+      {
+        companyId: fixture.company.id,
+        principalType: "agent",
+        principalId: fixture.agents.lowTrust.id,
+        permissionKey: "skills:create",
+        grantedByUserId: null,
+      },
+    ]);
 
     const lowTrustRes = await request(createApp(db, agentActor(fixture))).get("/api/agents/me");
     expect(lowTrustRes.status, JSON.stringify(lowTrustRes.body)).toBe(200);
@@ -702,6 +729,16 @@ describeEmbeddedPostgres("low-trust red-team HTTP route regression suite", () =>
     expect(lowTrustSelfByIdRes.body).not.toHaveProperty("permissions");
     expect(lowTrustSelfByIdRes.body).not.toHaveProperty("access");
     expectNoCanary(lowTrustSelfByIdRes.body, fixture.canaries.agentConfig);
+
+    const lowTrustPeerConfigRes = await request(createApp(db, agentActor(fixture)))
+      .get(`/api/agents/${fixture.agents.collaborator.id}/configuration`);
+    expect(lowTrustPeerConfigRes.status, JSON.stringify(lowTrustPeerConfigRes.body)).toBe(403);
+    expectNoCanary(lowTrustPeerConfigRes.body, fixture.canaries.agentConfig);
+
+    const lowTrustSelfBundleRes = await request(createApp(db, agentActor(fixture)))
+      .get(`/api/agents/${fixture.agents.lowTrust.id}/instructions-bundle`);
+    expect(lowTrustSelfBundleRes.status, JSON.stringify(lowTrustSelfBundleRes.body)).toBe(403);
+    expectNoCanary(lowTrustSelfBundleRes.body, fixture.canaries.agentConfig);
 
     const standardActor = agentActor(fixture, fixture.agents.standard.id);
     const standardRes = await request(createApp(db, { ...standardActor, runId: null })).get("/api/agents/me");
