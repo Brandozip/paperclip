@@ -32,4 +32,22 @@ describe("buildAgentSkillSourceMeta", () => {
       sourceType: "local_path",
     })).toBe("Paperclip App / Engineering workspace");
   });
+
+  it("does not surface long filesystem labels for catalog skills", () => {
+    expect(source({
+      sourceBadge: "catalog",
+      sourceLabel: "/srv/paperclip/home/.paperclip/instances/default/skills/company-id/__catalog__/briefs-discover-cards--68f7e3ad47",
+      sourceLocator: null,
+      sourceType: "catalog",
+    })).toBe("Catalog");
+  });
+
+  it("keeps human-readable catalog labels", () => {
+    expect(source({
+      sourceBadge: "catalog",
+      sourceLabel: "Bundled catalog",
+      sourceLocator: null,
+      sourceType: "catalog",
+    })).toBe("Bundled catalog");
+  });
 });

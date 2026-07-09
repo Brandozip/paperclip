@@ -81,6 +81,12 @@ function displayLocalSourceLabel(label: string | null | undefined) {
   return trimmed;
 }
 
+function displayCatalogSourceLabel(label: string | null | undefined) {
+  const trimmed = label?.trim();
+  if (!trimmed || isFilesystemLikeLabel(trimmed)) return "Catalog";
+  return trimmed;
+}
+
 export function buildAgentSkillSourceMeta(skill: SourceSkill): AgentSkillSourceMeta {
   if (skill.sourceBadge === "github" || skill.sourceType === "github") {
     const repo = githubRepoLabel(skill.sourceLabel) ?? githubRepoLabel(skill.sourceLocator);
@@ -100,9 +106,13 @@ export function buildAgentSkillSourceMeta(skill: SourceSkill): AgentSkillSourceM
     return { icon: Paperclip, label: skill.sourceLabel?.trim() || "Paperclip managed" };
   }
 
+  if (skill.sourceBadge === "catalog" || skill.sourceType === "catalog") {
+    return { icon: Boxes, label: displayCatalogSourceLabel(skill.sourceLabel) };
+  }
+
   if (skill.sourceBadge === "local" || skill.sourceType === "local_path") {
     return { icon: Folder, label: displayLocalSourceLabel(skill.sourceLabel) };
   }
 
-  return { icon: Boxes, label: skill.sourceLabel?.trim() || "Catalog" };
+  return { icon: Boxes, label: displayCatalogSourceLabel(skill.sourceLabel) };
 }
