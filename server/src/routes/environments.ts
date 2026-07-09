@@ -48,14 +48,8 @@ import { listReadyPluginEnvironmentDrivers } from "../services/plugin-environmen
 import { getConfiguredSecretProvider } from "../secrets/configured-provider.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
-import { environmentService } from "../services/environments.js";
+import { environmentService, ACTIVE_CUSTOM_IMAGE_SETUP_STATUSES } from "../services/environments.js";
 import { executionWorkspaceService } from "../services/execution-workspaces.js";
-
-const ACTIVE_CUSTOM_IMAGE_SETUP_STATUSES = [
-  "starting",
-  "waiting_for_user",
-  "capturing",
-] as const satisfies readonly EnvironmentCustomImageSetupSessionStatus[];
 
 function isActiveCustomImageSetupStatus(status: EnvironmentCustomImageSetupSessionStatus): boolean {
   return (ACTIVE_CUSTOM_IMAGE_SETUP_STATUSES as readonly string[]).includes(status);
