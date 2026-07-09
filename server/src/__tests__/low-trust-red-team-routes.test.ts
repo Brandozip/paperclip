@@ -872,7 +872,7 @@ describeEmbeddedPostgres("low-trust red-team HTTP route regression suite", () =>
     const lowTrustApp = createApp(db, agentActor(fixture));
     const standardApp = createApp(db, agentActor(fixture, fixture.agents.standard.id));
     const gateway = await createControlledGatewayServer();
-    const heartbeat = heartbeatService(db);
+    const heartbeat = heartbeatService(db, { runtimeEnv: {} });
 
     try {
       const comment = await request(lowTrustApp)
